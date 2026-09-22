@@ -56,15 +56,15 @@ def format_bullets_and_lists(text: str) -> str:
 def detect_heading(text: str) -> Optional[Tuple[int, str]]:
     """'2 Background and Motivation' 또는 '2.1 Architecture' 등의 학술 논문 헤딩을 감지합니다."""
     stripped = text.strip()
-    m1 = re.match(r"^(\d+)\s+([A-Z][A-Za-z0-9\s,\-_:]{3,60})$", stripped)
+    m1 = re.match(r"^(\d+)\.?\s+([A-Z][A-Za-z0-9\s,\-_:]{3,60})$", stripped)
     if m1 and len(stripped.splitlines()) <= 2:
         return 2, f"## {stripped}"
 
-    m2 = re.match(r"^(\d+\.\d+)\s+([A-Z][A-Za-z0-9\s,\-_:]{3,60})$", stripped)
+    m2 = re.match(r"^(\d+\.\d+)\.?\s+([A-Z][A-Za-z0-9\s,\-_:]{3,60})$", stripped)
     if m2 and len(stripped.splitlines()) <= 2:
         return 3, f"### {stripped}"
 
-    m3 = re.match(r"^(\d+\.\d+\.\d+)\s+([A-Z][A-Za-z0-9\s,\-_:]{3,60})$", stripped)
+    m3 = re.match(r"^(\d+\.\d+\.\d+)\.?\s+([A-Z][A-Za-z0-9\s,\-_:]{3,60})$", stripped)
     if m3 and len(stripped.splitlines()) <= 2:
         return 4, f"#### {stripped}"
 
@@ -315,17 +315,109 @@ def extract_visuals_and_mask(
     return detected_visuals, masking_boxes
 
 
+def detect_page_equations(page: pymupdf.Page) -> List[Tuple[pymupdf.Rect, str]]:
+    """페이지 내 번호가 매겨진 수식 블록들을 감지하고 수평/수직 조각들을 온전한 KaTeX 수식으로 병합합니다."""
+    dict_page = page.get_text("dict")
+    text_b = [b for b in dict_page.get("blocks", []) if b.get("type") == 0]
+    if not text_b:
+        return []
+
+    text_b.sort(key=lambda b: (b["bbox"][1], b["bbox"][0]))
+    used_indices = set()
+    equations = []
+
+    for idx, b in enumerate(text_b):
+        if idx in used_indices:
+            continue
+        txt = "".join([s["text"] for l in b["lines"] for s in l["spans"]]).strip()
+        m = re.search(r"\((\d+)\)\s*$", txt)
+        if not m:
+            continue
+        # 본문 인용 서술어 오인식 방지
+        if re.search(
+            r"\b(eq\.|equation|algorithm|section|figure|table|in|see|ref|case|step|device|expert|token)\s*\((\d+)\)\s*$",
+            txt,
+            re.I,
+        ):
+            continue
+
+        tag_y0, tag_y1 = b["bbox"][1], b["bbox"][3]
+        tag_x1 = b["bbox"][2]
+
+        # 1. 동일 수평 라인상의 블록 탐색 (|y0 - tag_y0| < 6)
+        line_indices = [
+            i
+            for i, ob in enumerate(text_b)
+            if i not in used_indices
+            and abs(ob["bbox"][1] - tag_y0) < 6
+            and abs(ob["bbox"][3] - tag_y1) < 6
+            and ob["bbox"][0] <= tag_x1 + 5
+        ]
+
+        # 우선 동일 라인 블록들로 파싱 시도
+        cand_blocks = [text_b[i] for i in line_indices]
+        cand_blocks.sort(key=lambda x: x["bbox"][0])
+        merged_spans = [s for cb in cand_blocks for l in cb["lines"] for s in l["spans"]]
+        merged_rect = pymupdf.Rect(
+            min(cb["bbox"][0] for cb in cand_blocks),
+            min(cb["bbox"][1] for cb in cand_blocks),
+            max(cb["bbox"][2] for cb in cand_blocks),
+            max(cb["bbox"][3] for cb in cand_blocks),
+        )
+        merged_block = {"bbox": tuple(merged_rect), "lines": [{"spans": merged_spans}]}
+        res = parse_equation_block(merged_block)
+
+        # 수평 라인만으로 연산자가 부족하거나 분절된 경우에 한해 수직 확장 시도
+        if not res and len(line_indices) == 1:
+            expanded_indices = list(line_indices)
+            for i, ob in enumerate(text_b):
+                if i in used_indices or i in line_indices:
+                    continue
+                ob_txt = "".join([s["text"] for l in ob["lines"] for s in l["spans"]]).strip()
+                if len(ob_txt) > 80 or len(ob["lines"]) > 3:
+                    continue
+                if ob["bbox"][3] >= tag_y0 - 15 and ob["bbox"][1] <= tag_y1 + 15:
+                    if ob["bbox"][2] <= tag_x1 + 5 and not re.search(r"\(\d+\)\s*$", ob_txt):
+                        expanded_indices.append(i)
+
+            if len(expanded_indices) > 1:
+                cand_blocks = [text_b[i] for i in expanded_indices]
+                cand_blocks.sort(key=lambda x: (x["bbox"][0], x["bbox"][1]))
+                merged_spans = [s for cb in cand_blocks for l in cb["lines"] for s in l["spans"]]
+                merged_rect = pymupdf.Rect(
+                    min(cb["bbox"][0] for cb in cand_blocks),
+                    min(cb["bbox"][1] for cb in cand_blocks),
+                    max(cb["bbox"][2] for cb in cand_blocks),
+                    max(cb["bbox"][3] for cb in cand_blocks),
+                )
+                merged_block = {"bbox": tuple(merged_rect), "lines": [{"spans": merged_spans}]}
+                res = parse_equation_block(merged_block)
+                if res:
+                    line_indices = expanded_indices
+
+        if res:
+            for i in line_indices:
+                used_indices.add(i)
+            equations.append((merged_rect, res))
+
+    return equations
+
+
 def extract_clean_page_text(
     page: pymupdf.Page,
     page_num: int,
     masking_boxes: List[pymupdf.Rect],
 ) -> str:
-    """공간 마스킹을 적용하고 2단 컬럼 읽기 순서 및 수식/불릿을 정규화하여 순수 본문 텍스트를 반환합니다."""
+    """공간 마스킹을 적용하고 1단/2단 컬럼 구조를 자동 판별하여 수식 및 본문을 정규화합니다."""
     page_width = page.rect.width
-    mid_x = page_width / 2
+    page_height = page.rect.height
+    mid_x = page_width / 2.0
     raw_blocks = page.get_text("blocks")
 
-    # 1. 시각 영역 내부 텍스트 공간 마스킹
+    # 1. 수식 블록 선행 감지 및 병합
+    equations = detect_page_equations(page)
+
+    # 2. 시각 영역 내부 텍스트 공간 마스킹
     clean_blocks = []
     for b in raw_blocks:
         x0, y0, x1, y1, text, block_no, block_type = b
@@ -345,72 +437,92 @@ def extract_clean_page_text(
         if not is_masked:
             clean_blocks.append(b)
 
-    # 2. 학술 2단 컬럼 읽기 순서 재정렬
-    top_blocks = []
-    left_blocks = []
-    right_blocks = []
-    bottom_blocks = []
-
+    # 3. 수식에 흡수된 블록 분리 및 통합 단위 생성
+    unified_units: List[Tuple[pymupdf.Rect, str, str]] = []
     for b in clean_blocks:
-        x0, y0, x1, y1 = b[:4]
-        is_span = (x1 - x0) > (page_width * 0.65)
-        if is_span and y0 < page.rect.height * 0.35:
-            top_blocks.append(b)
-        elif is_span and y0 >= page.rect.height * 0.7:
-            bottom_blocks.append(b)
-        elif x1 <= mid_x + 15:
-            left_blocks.append(b)
-        else:
-            right_blocks.append(b)
+        b_rect = pymupdf.Rect(b[:4])
+        b_text = b[4].strip()
+        part_of_eq = False
+        for eq_rect, _ in equations:
+            inter = b_rect & eq_rect
+            if not inter.is_empty and (inter.get_area() / b_rect.get_area()) > 0.4:
+                part_of_eq = True
+                break
+            # 수식 주변의 미세 기호 파편(<= 6자, 시그마 첨자/분모 등) 흡수
+            if len(b_text) <= 6 and abs(b_rect.y0 - eq_rect.y0) < 18 and abs(b_rect.y1 - eq_rect.y1) < 18:
+                if b_rect.x0 >= eq_rect.x0 - 20 and b_rect.x1 <= eq_rect.x1 + 20:
+                    part_of_eq = True
+                    break
+        if not part_of_eq:
+            unified_units.append((b_rect, "text", b_text))
 
-    top_blocks.sort(key=lambda x: x[1])
-    left_blocks.sort(key=lambda x: x[1])
-    right_blocks.sort(key=lambda x: x[1])
-    bottom_blocks.sort(key=lambda x: x[1])
+    for eq_rect, eq_str in equations:
+        unified_units.append((eq_rect, "eq", eq_str))
 
-    ordered_blocks = top_blocks + left_blocks + right_blocks + bottom_blocks
+    # 4. 1단 vs 2단 컬럼 레이아웃 적응형 감지
+    crossing = sum(
+        1
+        for u in unified_units
+        if u[1] == "text"
+        and len(u[2]) > 30
+        and u[0].x0 < mid_x - 20
+        and u[0].x1 > mid_x + 20
+    )
+    total_text = sum(1 for u in unified_units if u[1] == "text" and len(u[2]) > 30)
+    is_single_col = (crossing / total_text > 0.3) if total_text > 0 else True
 
-    dict_page = page.get_text("dict")
-    dict_blocks = {b_dict.get("number", idx): b_dict for idx, b_dict in enumerate(dict_page.get("blocks", []))}
+    if is_single_col:
+        # 단일 컬럼 논문: 단순 위->아래 y 좌표 정렬
+        unified_units.sort(key=lambda u: u[0].y0)
+    else:
+        # 2단 컬럼 학술 논문: Top(Span) -> Left Column -> Right Column -> Bottom(Span)
+        top, left, right, bottom = [], [], [], []
+        for u in unified_units:
+            r = u[0]
+            is_span = r.width > (page_width * 0.65)
+            if is_span and r.y0 < page_height * 0.35:
+                top.append(u)
+            elif is_span and r.y0 >= page_height * 0.7:
+                bottom.append(u)
+            elif r.x1 <= mid_x + 15:
+                left.append(u)
+            else:
+                right.append(u)
+        top.sort(key=lambda u: u[0].y0)
+        left.sort(key=lambda u: u[0].y0)
+        right.sort(key=lambda u: u[0].y0)
+        bottom.sort(key=lambda u: u[0].y0)
+        unified_units = top + left + right + bottom
 
+    # 5. 본문 및 수식 마크다운 렌더링
     p_lines = []
-    for b in ordered_blocks:
-        raw_b_text = b[4].strip()
-        b_no = b[5]
-        b_dict = dict_blocks.get(b_no)
-
-        # 수식 블록 체크
-        if b_dict:
-            eq_latex = parse_equation_block(b_dict)
-            if eq_latex:
-                p_lines.append(f"\n{eq_latex}\n")
+    for r, kind, content in unified_units:
+        if kind == "eq":
+            p_lines.append(f"\n{content}\n")
+        else:
+            heading_info = detect_heading(content)
+            if heading_info:
+                level, heading_text = heading_info
+                p_lines.append(f"\n{heading_text}\n")
                 continue
 
-        # 학술 헤딩 체크
-        heading_info = detect_heading(raw_b_text)
-        if heading_info:
-            level, heading_text = heading_info
-            p_lines.append(f"\n{heading_text}\n")
-            continue
+            normalized = dehyphenate(content)
+            normalized = format_bullets_and_lists(normalized)
+            # 본문 내 불필요한 $$ 누수 차단
+            normalized = normalized.replace("$$", r"\$\$")
 
-        # 일반 본문 텍스트 정규화
-        normalized = dehyphenate(raw_b_text)
-        normalized = format_bullets_and_lists(normalized)
-        # 본문 내 돌발 $$ 기호를 이스케이프하여 마크다운 수식 블록 누수 차단
-        normalized = normalized.replace("$$", r"\$\$")
-
-        lines = normalized.splitlines()
-        processed_lines = []
-        for line in lines:
-            if line.strip().startswith("- "):
-                processed_lines.append(line.strip())
-            else:
-                if processed_lines and not processed_lines[-1].startswith("- "):
-                    processed_lines[-1] += " " + line.strip()
-                else:
+            lines = normalized.splitlines()
+            processed_lines = []
+            for line in lines:
+                if line.strip().startswith("- "):
                     processed_lines.append(line.strip())
+                else:
+                    if processed_lines and not processed_lines[-1].startswith("- "):
+                        processed_lines[-1] += " " + line.strip()
+                    else:
+                        processed_lines.append(line.strip())
 
-        p_lines.append("\n".join(processed_lines) + "\n")
+            p_lines.append("\n".join(processed_lines) + "\n")
 
     page_text = dehyphenate("\n".join(p_lines))
     return page_text
