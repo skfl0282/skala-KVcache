@@ -35,8 +35,14 @@ def report_gen(state: GraphState):
 
     report = report_gen_chain.invoke(
         {
+            "tech_sw": state.get("tech_sw", ""),
+            "tech_hw": state.get("tech_hw", ""),
+            "domain": state.get("domain", ""),
             "tech_research_sw": state.get("tech_research_sw", ""),
             "tech_research_hw": state.get("tech_research_hw", ""),
+            "market_eval": state.get("market_eval", ""),
+            "stakeholder_eval": state.get("stakeholder_eval", ""),
+            "domain_eval": state.get("domain_eval", ""),
             "synthesis": state.get("synthesis", ""),
             "data_limited": ", ".join(data_limited) if data_limited else "없음",
             "references": "\n".join(f"- {ref}" for ref in references) if references else "없음",
