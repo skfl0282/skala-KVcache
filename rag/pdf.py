@@ -52,8 +52,21 @@ class PDFRetrievalChain(RetrievalChain):
 
 # --- 설계서 B. RAG 적용 대상: 기술조사/도메인 평가/이해관계자 평가 에이전트가 함께 쓰는 원문 자료 ---
 TECH_PAPER_PATHS = [
+    "data/raw/A_Case_Against_CXL_Memory_Pooling_no-refs.pdf",
     "data/raw/DeepSeek-V2.pdf",
+    "data/raw/DeepSeek_V4_in_vLLM_Efficient_Long_Context_Attention.pdf",
+    "data/raw/Design_Tradeoffs_CXL_Memory_Pools_no-refs.pdf",
+    "data/raw/GQA_Training_Generalized_Multi_Query_Transformer_Models_from_Multi_Head_Checkpoints.pdf",
     "data/raw/ITME.pdf",
+    "data/raw/InfiniGen.pdf",
+    "data/raw/KIVI_no-refs.pdf",
+    "data/raw/LIMINAL_Efficient_LLM_Inference_no-refs.pdf",
+    "data/raw/PIMCXL_no-refs.pdf",
+    "data/raw/Rearchitecting_Datacenter_Lifecycle_for_AI_no-refs.pdf",
+    "data/raw/SGLang_v0.3_Release_7x_ Faster_DeepSeek MLA, 1.5x Faster torch.compile, Multi-Image_Video LLaVA-OneVision - LMSYS Org.pdf",
+    "data/raw/Systematic_CXL_Memory_Characterization_at_Scale_no-refs.pdf",
+    "data/raw/TransMLA_MLA_Is_All_You_Need.pdf",
+    "data/raw/TurboQuant.pdf",
 ]
 
 
