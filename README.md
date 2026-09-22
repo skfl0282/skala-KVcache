@@ -85,18 +85,8 @@
 | 보고서 생성 에이전트 | `report_gen` | X | 단계별 내용을 연결해 평가 보고서 생성 |
 
 ## Architecture
-```
-START
-  └─ select_technology (기술 선정)
-       └─ tech_research (기술 조사 RAG + SW/HW 대조 기술 비교 + TRL 평가)
-            ├─ market_eval (웹검색, 내부 충분성 체크 + 보완 루프 포함)
-            ├─ stakeholder_eval (RAG + 웹검색, 내부 충분성 체크 + 보완 루프 포함)
-            └─ domain_eval (RAG + 웹검색, 내부 충분성 체크 + 보완 루프 포함)
-                 ["market_eval","stakeholder_eval","domain_eval"] 조인
-                              └─ synthesis (fan-in, 기술 조사 결과도 함께 입력)
-                                   └─ report_gen
-                                        └─ END
-```
+<img width="2860" height="6928" alt="Technology Evaluation-2026-09-22-004218" src="https://github.com/user-attachments/assets/a33f6fc4-5a8d-4550-ac0b-40b7a9bab335" />
+
 원본 mermaid 설계도는 업로드된 설계산출물(`RAG-Design_판교-9반.pdf`) D절 참고.
 설계서 원안에는 `tech_research` 뒤에도 "충분한가?" 분기 + 웹검색 보완 노드가
 그래프 레벨로 그려져 있었으나, 팀 논의 후 그래프에서 완전히 제거하고
