@@ -441,18 +441,20 @@ def parse_pdf_to_documents(
 
     doc = pymupdf.open(str(pdf_path))
     documents = []
+    page_contents = []
 
     for page_idx in range(len(doc)):
         page_num = page_idx + 1
         page = doc[page_idx]
 
-        # 1. 시각 요소 감지 및 마스킹 박스 계산
+        # 1. 시각 요소 감지 및 마스킹 박스 계산 (이미지 저장)
         visuals, masking_boxes = extract_visuals_and_mask(
             page, page_num, str(pdf_path), output_dir=output_dir
         )
 
         # 2. 마스킹 적용 및 본문 텍스트 정제
         clean_text = extract_clean_page_text(page, page_num, masking_boxes)
+        page_contents.append((page_num, clean_text, visuals))
 
         # 3. 도표 표 Markdown이 존재하면 본문 하단에 함께 결합 (LLM 검색 지원)
         table_sections = []
@@ -474,6 +476,35 @@ def parse_pdf_to_documents(
             },
         )
         documents.append(doc_obj)
+
+    # 5. 로컬 디스크에 추출된 텍스트 Markdown 파일 저장 (사용자 확인 및 아티팩트용)
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        full_clean_lines = [f"# {stem} (Full Paper Clean Text)\n"]
+        full_assembled_lines = [f"# {stem} (Full Paper Assembled Document)\n"]
+
+        for p_num, p_text, visuals in page_contents:
+            full_clean_lines.append(f"\n<!-- Page {p_num} -->\n")
+            full_clean_lines.append(p_text)
+
+            full_assembled_lines.append(f"\n<!-- Page {p_num} -->\n")
+            full_assembled_lines.append(p_text)
+
+            if visuals:
+                full_assembled_lines.append(f"\n### Visuals on Page {p_num}\n")
+                for v in visuals:
+                    if v.get("table_md"):
+                        full_assembled_lines.append(f"> **{v['caption']}**\n\n{v['table_md']}\n\n*Original Table*: ![{v['kind']} {v['num']}]({v['rel_path']})\n")
+                    else:
+                        full_assembled_lines.append(f"![{v['kind']} {v['num']}]({v['rel_path']})\n\n> **{v['caption']}**\n")
+
+        clean_full_text = dehyphenate("\n".join(full_clean_lines))
+        assembled_full_text = dehyphenate("\n".join(full_assembled_lines))
+
+        (output_dir / "full_paper_clean.md").write_text(clean_full_text, encoding="utf-8")
+        (output_dir / "full_paper_assembled.md").write_text(assembled_full_text, encoding="utf-8")
+    except Exception as e:
+        print(f"[WARN] 마크다운 파일 저장 실패 ({output_dir}): {e}")
 
     doc.close()
     return documents
