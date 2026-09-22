@@ -24,7 +24,10 @@ class GraphState(TypedDict):
     synthesis: Annotated[str, "평가 종합 결과 (G)"]
     report: Annotated[str, "최종 보고서 (H)"]
 
-    data_limited: Annotated[List[str], "웹검색 보완 후에도 자료가 부족했던 노드 이름 기록"]
+    # 웹검색 보완 후에도 자료가 부족했던 노드 이름 기록. market_eval/domain_eval처럼
+    # 병렬로 fan-out되는 노드가 동시에 쓸 수 있으므로 references와 동일하게
+    # operator.add로 누적한다 (각 노드는 자신의 항목만 담은 리스트를 반환).
+    data_limited: Annotated[List[str], operator.add]
     # RAG/웹검색 노드가 실제로 인용한 출처 (report_gen의 REFERENCE 절 재료).
     # 각 노드는 자신이 실제로 참고한 출처만 append해서 반환하고, fan-out 노드
     # 간에는 operator.add로 리스트가 누적된다.

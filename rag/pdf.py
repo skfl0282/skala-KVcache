@@ -14,6 +14,7 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from rag.base import RetrievalChain
+from rag.pdf_parser import parse_pdf_to_documents
 
 
 def format_docs(docs: list[Document]) -> str:
@@ -36,8 +37,13 @@ class PDFRetrievalChain(RetrievalChain):
     def load_documents(self, source_uris: list[str]) -> list[Document]:
         docs = []
         for source_uri in source_uris:
-            loader = PDFPlumberLoader(source_uri)
-            docs.extend(loader.load())
+            try:
+                parsed = parse_pdf_to_documents(source_uri)
+                docs.extend(parsed)
+            except Exception as e:
+                print(f"[WARN] 알고리즘 PDF 파서 오류, PDFPlumberLoader로 폴백 ({source_uri}): {e}")
+                loader = PDFPlumberLoader(source_uri)
+                docs.extend(loader.load())
         return docs
 
     def create_text_splitter(self) -> RecursiveCharacterTextSplitter:
