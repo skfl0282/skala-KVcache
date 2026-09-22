@@ -1,6 +1,4 @@
 """prompts/*.txt 템플릿을 PromptTemplate으로 불러오는 공용 유틸리티.
-
-담당: __________ (TODO: 담당자 배정)
 """
 
 from langchain_core.prompts import PromptTemplate
