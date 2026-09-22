@@ -102,26 +102,7 @@
 | 보고서 생성 에이전트 | `report_gen` | X | 단계별 내용을 연결해 평가 보고서 생성 |
 
 ## Architecture
-```
-START
-  └─ select_technology (기술 선정)
-       └─ tech_research (기술 조사 RAG + SW/HW 대조 기술 비교 + TRL 평가)
-            ├─ market_eval (웹검색, 내부 충분성 체크 + 보완 루프 포함)
-            ├─ stakeholder_eval (RAG + 웹검색, 내부 충분성 체크 + 보완 루프 포함)
-            └─ domain_eval (RAG + 웹검색, 내부 충분성 체크 + 보완 루프 포함)
-                 ["market_eval","stakeholder_eval","domain_eval"] 조인
-                              └─ synthesis (fan-in, 기술 조사 결과도 함께 입력)
-                                   └─ report_gen
-                                        └─ END
-```
-원본 mermaid 설계도는 업로드된 설계산출물(`RAG-Design_판교-9반.pdf`) D절 참고.
-설계서 원안에는 `tech_research` 뒤에도 "충분한가?" 분기 + 웹검색 보완 노드가
-그래프 레벨로 그려져 있었으나, 팀 논의 후 그래프에서 완전히 제거하고
-`tech_research`가 RAG 조사 결과를 바로 3개 평가 노드로 fan-out하도록
-단순화했다. 시장/이해관계자/도메인 평가의 충분성 체크 + 웹검색 보완
-루프는 `graph/build_graph.py` 상단 docstring에 설명된 대로 그래프 레벨
-분기 대신 각 노드(`market_eval.py`, `stakeholder_eval.py`,
-`domain_eval.py`) 내부 로직으로 처리한다.
+<img width="286" height="692" alt="Technology Evaluation-2026-09-22-004218" src="https://github.com/user-attachments/assets/a33f6fc4-5a8d-4550-ac0b-40b7a9bab335" />
 
 ## Example Output (`python app.py` 실행 결과)
 아래는 `outputs/report.md`에 실제로 생성된 결과 발췌다 (기획 의도가 실제로
