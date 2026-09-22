@@ -31,6 +31,7 @@ def report_gen(state: GraphState):
     print("\n==== [REPORT GEN] ====\n")
 
     data_limited = state.get("data_limited", [])
+    references = state.get("references", [])
 
     report = report_gen_chain.invoke(
         {
@@ -38,6 +39,7 @@ def report_gen(state: GraphState):
             "tech_research_hw": state.get("tech_research_hw", ""),
             "synthesis": state.get("synthesis", ""),
             "data_limited": ", ".join(data_limited) if data_limited else "없음",
+            "references": "\n".join(f"- {ref}" for ref in references) if references else "없음",
         }
     )
 
