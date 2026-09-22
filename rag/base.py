@@ -15,10 +15,11 @@ from rag.embeddings import create_bge_m3_embeddings
 
 
 class RetrievalChain(ABC):
-    def __init__(self):
+    def __init__(self, collection_name: str = "kv_cache_eval", k: int = 8):
         self.source_uri = None
-        self.k = 8
+        self.k = k
         self.index_dir = Path(".cache/chroma_index")
+        self.collection_name = collection_name
 
     @abstractmethod
     def load_documents(self, source_uris):
@@ -39,15 +40,22 @@ class RetrievalChain(ABC):
         return create_bge_m3_embeddings()
 
     def create_vectorstore(self, split_docs):
-        """분할된 문서로부터 Chroma 벡터스토어를 생성합니다."""
+        """분할된 문서로부터 Chroma 벡터스토어를 생성합니다.
+
+        같은 collection_name의 인덱스가 디스크에 이미 있으면 재사용하고,
+        비어 있을 때만 임베딩/삽입한다. tech_research / domain_eval /
+        stakeholder_eval이 각자 build_tech_retrieval_chain()을 호출할 때마다
+        동일 문서가 중복 삽입되는 것을 방지하기 위함이다.
+        """
         self.index_dir.mkdir(parents=True, exist_ok=True)
 
-        vectorstore = Chroma.from_documents(
-            documents=split_docs,
-            embedding=self.create_embedding(),
+        vectorstore = Chroma(
+            collection_name=self.collection_name,
+            embedding_function=self.create_embedding(),
             persist_directory=str(self.index_dir),
-            collection_name="kv_cache_eval",
         )
+        if not vectorstore.get(limit=1)["ids"]:
+            vectorstore.add_documents(split_docs)
         return vectorstore
 
     def create_retriever(self, vectorstore):

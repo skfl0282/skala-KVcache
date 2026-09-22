@@ -31,6 +31,8 @@ def synthesis(state: GraphState):
 
     result = synthesis_chain.invoke(
         {
+            "tech_research_sw": state.get("tech_research_sw", ""),
+            "tech_research_hw": state.get("tech_research_hw", ""),
             "market_eval": state.get("market_eval", ""),
             "stakeholder_eval": state.get("stakeholder_eval", ""),
             "domain_eval": state.get("domain_eval", ""),

@@ -5,17 +5,17 @@
 ---------
 START
   -> select_technology                (기술 선정)
-  -> tech_research                    (기술 조사 RAG)
-  -> [조건부, route_after_tech_research]
-       sufficient   -> market_eval, stakeholder_eval, domain_eval 로 바로 fan-out
-       insufficient -> web_search_supplement_tech
-                          -> market_eval, stakeholder_eval, domain_eval 로 fan-out
+  -> tech_research                    (기술 조사 RAG, SW/HW 모두 처리 후 바로 fan-out)
   -> market_eval / stakeholder_eval / domain_eval   (병렬 3개 노드)
        (domain_eval 노드 내부에 자체 충분성 체크 + 웹검색 보완 루프 포함.
         이유는 아래 참고)
   -> synthesis   (["market_eval","stakeholder_eval","domain_eval"] 조인 -> fan-in)
   -> report_gen
   -> END
+
+tech_research 단계의 충분성 체크(sufficient/insufficient) + 웹검색 보완
+분기는 팀 논의 후 제거했다. tech_research는 이제 RAG 조사 결과를 그대로
+3개 평가 노드로 fan-out한다.
 
 설계서 원안에서는 "도메인 평가 RAG" 뒤에도 별도의 "충분한가?" 분기 노드가
 그래프 레벨로 그려져 있다. 다만 그 분기를 market/stakeholder 브랜치와
@@ -26,8 +26,6 @@ agents/domain_eval.py 노드 내부 로직(순차 호출)으로 접어 넣었다
 팀 논의 후 필요하면 domain 담당자가 별도 노드로 다시 분리해도 된다.
 """
 
-from typing import Sequence
-
 from langgraph.graph import END, START, StateGraph
 
 from agents.domain_eval import domain_eval
@@ -35,24 +33,11 @@ from agents.market_eval import market_eval
 from agents.report_gen import report_gen
 from agents.stakeholder_eval import stakeholder_eval
 from agents.synthesis import synthesis
-from agents.tech_research import (
-    route_after_tech_research,
-    tech_research,
-    web_search_supplement_tech,
-)
+from agents.tech_research import tech_research
 from agents.tech_selector import select_technology
 from graph.state import GraphState
 
 EVAL_NODES = ["market_eval", "stakeholder_eval", "domain_eval"]
-
-
-def route_tech_research_fanout(state: GraphState) -> Sequence[str]:
-    """route_after_tech_research(sufficient/insufficient)의 결과를 실제 다음
-    노드 목록으로 변환하는 fan-out 라우팅 함수.
-    """
-    if route_after_tech_research(state) == "sufficient":
-        return EVAL_NODES
-    return ["web_search_supplement_tech"]
 
 
 def build_graph():
@@ -66,7 +51,6 @@ def build_graph():
     # --- 노드 등록 ---
     workflow.add_node("select_technology", select_technology)
     workflow.add_node("tech_research", tech_research)
-    workflow.add_node("web_search_supplement_tech", web_search_supplement_tech)
     workflow.add_node("market_eval", market_eval)
     workflow.add_node("stakeholder_eval", stakeholder_eval)
     workflow.add_node("domain_eval", domain_eval)
@@ -77,15 +61,10 @@ def build_graph():
     workflow.add_edge(START, "select_technology")
     workflow.add_edge("select_technology", "tech_research")
 
-    # --- 기술 조사 결과 충분성에 따라 바로 fan-out 하거나 웹검색 보완 후 fan-out ---
-    workflow.add_conditional_edges(
-        "tech_research",
-        route_tech_research_fanout,
-        ["web_search_supplement_tech", *EVAL_NODES],
-    )
-    workflow.add_edge("web_search_supplement_tech", "market_eval")
-    workflow.add_edge("web_search_supplement_tech", "stakeholder_eval")
-    workflow.add_edge("web_search_supplement_tech", "domain_eval")
+    # --- tech_research 완료 즉시 3개 평가 노드로 fan-out ---
+    workflow.add_edge("tech_research", "market_eval")
+    workflow.add_edge("tech_research", "stakeholder_eval")
+    workflow.add_edge("tech_research", "domain_eval")
 
     # --- Fan-in: 3개 노드 모두 끝나야 synthesis 실행 ---
     workflow.add_edge(EVAL_NODES, "synthesis")

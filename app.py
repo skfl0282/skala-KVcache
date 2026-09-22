@@ -11,6 +11,8 @@ import argparse
 
 from dotenv import load_dotenv
 
+load_dotenv(override=True)
+
 from agents.tech_selector import DEFAULT_DOMAIN, DEFAULT_TECH_HW, DEFAULT_TECH_SW
 from graph.build_graph import build_graph
 
@@ -24,7 +26,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    load_dotenv(override=True)
     args = parse_args()
 
     app = build_graph()

@@ -46,15 +46,45 @@ class PDFRetrievalChain(RetrievalChain):
 
 # --- 설계서 B. RAG 적용 대상: 기술조사/도메인 평가/이해관계자 평가 에이전트가 함께 쓰는 원문 자료 ---
 TECH_PAPER_PATHS = [
-    "data/raw/deepseek_v2.pdf",   # TODO: 실제 파일명으로 교체
-    "data/raw/itme.pdf",          # TODO: 실제 파일명으로 교체
+    "data/raw/DeepSeek-V2.pdf",
+    "data/raw/ITME.pdf",
 ]
 
 
 def build_tech_retrieval_chain(source_uri: list[str] = TECH_PAPER_PATHS) -> PDFRetrievalChain:
     """기술 조사 / 도메인 평가 에이전트가 공용으로 사용하는 RAG 체인을 생성합니다.
     반환된 인스턴스의 .retriever를 각 agent가 자신의 prompts/*.txt 체인에 연결해서 쓴다.
-
-    TODO: data/raw/에 원문 PDF 2건을 넣은 뒤 사용하세요.
     """
     return PDFRetrievalChain(source_uri=source_uri).create_chain()
+
+
+# --- 선정 과정에서 제외된 대조 기술 원문. tech_research()가 SW/HW 각각의
+# "기술 개요"에 왜 이 대안을 안 골랐는지 한 줄 비교로 녹여 쓸 때만 참고한다.
+# domain_eval / stakeholder_eval이 쓰는 TECH_PAPER_PATHS 풀과는 별도 Chroma
+# collection으로 분리해서, 대조 기술 청크가 그쪽 평가 결과에 섞여 들어가지
+# 않게 한다. SW(DeepSeek-V2) 대조군과 HW(ITME) 대조군도 서로 다른 논문이라
+# collection을 나눠서 검색 시 서로 섞이지 않도록 한다. ---
+SW_COMPARISON_PAPER_PATHS = [
+    "data/raw/TurboQuant.pdf",
+]
+HW_COMPARISON_PAPER_PATHS = [
+    "data/raw/InfiniGen.pdf",
+]
+
+
+def build_sw_comparison_retrieval_chain(
+    source_uri: list[str] = SW_COMPARISON_PAPER_PATHS,
+) -> PDFRetrievalChain:
+    """SW(DeepSeek-V2) 쪽에서 제외된 대조 기술(TurboQuant) 원문 RAG 체인을 생성한다."""
+    return PDFRetrievalChain(
+        source_uri=source_uri, collection_name="kv_cache_comparison_sw", k=4
+    ).create_chain()
+
+
+def build_hw_comparison_retrieval_chain(
+    source_uri: list[str] = HW_COMPARISON_PAPER_PATHS,
+) -> PDFRetrievalChain:
+    """HW(ITME) 쪽에서 제외된 대조 기술(InfiniGen) 원문 RAG 체인을 생성한다."""
+    return PDFRetrievalChain(
+        source_uri=source_uri, collection_name="kv_cache_comparison_hw", k=4
+    ).create_chain()
