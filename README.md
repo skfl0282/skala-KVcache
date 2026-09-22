@@ -15,9 +15,10 @@
 - SW : **DeepSeek-V2 (Multi-head Latent Attention, MLA)** — Key-Value를
   저랭크 latent 벡터로 공동 압축하는 어텐션 구조로, KV 캐시를 93.3%
   절감하고 8×H800 GPU 환경에서 생성 처리량 50K tokens/s 이상을 달성.
-  실제 서비스 배포 및 실측 처리량 근거가 있어 **TRL 9**로 평가됨. 사후
-  압축 방식인 양자화 계열(**TurboQuant** 등, 정밀도 손실·추가 연산 지연
-  한계) 대비 비교 평가 대상으로서 타당성이 높다고 판단해 선정.
+  실제 서비스 배포 및 실측 처리량 근거는 있으나 장기 상용 운영·SLA 근거는
+  부족해 **추정 TRL 8**로 평가됨. 사후 압축 방식인 양자화 계열
+  (**TurboQuant** 등, 정밀도 손실·추가 연산 지연 한계) 대비 비교 평가
+  대상으로서 타당성이 높다고 판단해 선정.
 - HW : **ITME (Inference Tiered Memory Expansion with Disaggregated
   CXL-Hybrid Memories)** — CXL 하이브리드 메모리와 SSD-backed 원격 메모리를
   GPU 서버가 RDMA로 접근하게 하는 계층형 메모리 확장 아키텍처. FPGA
@@ -30,10 +31,19 @@
   포함해, `tech_research`가 "왜 이 대안을 선택하지 않았는지"를 근거 기반
   으로 한 줄 비교하도록 함 (`rag/pdf.py`의 `SW_COMPARISON_PAPER_PATHS` /
   `HW_COMPARISON_PAPER_PATHS`).
+- `TECH_PAPER_PATHS`에는 선정 기술 원문 2건 외에도 CXL 메모리 풀링/특성화,
+  GQA, KIVI, LIMINAL, PIMCXL, 데이터센터 인프라, SGLang, TransMLA,
+  vLLM 롱컨텍스트 등 관련 논문 총 15건을 함께 인덱싱해, `domain_eval`/
+  `stakeholder_eval`이 더 넓은 근거로 평가할 수 있도록 함.
 
 ## Features
-- PDF 원문(DeepSeek-V2, ITME 논문 + 대조 기술 TurboQuant, InfiniGen) 기반
-  RAG 정보 추출 (기술 조사, 도메인 평가, 이해관계자 평가)
+- PDF 원문(선정 기술 DeepSeek-V2·ITME, 대조 기술 TurboQuant·InfiniGen,
+  관련 논문 11건 = 총 15건) 기반 RAG 정보 추출 (기술 조사, 도메인 평가,
+  이해관계자 평가)
+- Vision 딥러닝 모델 없이 PyMuPDF/pdfplumber 기하 분석만으로 Figure/Table
+  캡션 추출, 2단 컬럼 논문의 읽기 순서 재정렬, 수식·헤딩 정규화, 하이픈
+  결합을 수행하는 알고리즘 기반 PDF 파서 사용 (`rag/pdf_parser.py`,
+  실패 시 `PDFPlumberLoader`로 폴백)
 - 웹검색 기반 시장성 · 이해관계자 반응 조사
 - 기술 조사 결과에 NASA TRL 9단계 척도 기준 **기술성숙도(TRL) 평가**를
   포함 (논문 게재/동료심사 여부, 실측 vs 시뮬레이션 검증 방식, 실제
@@ -143,7 +153,7 @@ START
 ## Directory Structure
 ```
 ├── data/
-│   └── raw/                # 원문 PDF (DeepSeek-V2, ITME 논문 + 대조 기술 TurboQuant, InfiniGen)
+│   └── raw/                # 원문 PDF 15건 (선정 기술 2 + 대조 기술 2 + 관련 논문 11)
 ├── graph/
 │   ├── state.py             # GraphState(TypedDict + Annotated 설명)
 │   └── build_graph.py       # 노드/엣지 배선
@@ -159,7 +169,8 @@ START
 ├── rag/                     # RAG 공통 모듈 (실습자료 20-RAG/rag/ 구조를 따르되, retriever까지만 책임)
 │   ├── embeddings.py          # create_bge_m3_embeddings()
 │   ├── base.py                # RetrievalChain (ABC) - 원문 로딩~retriever 생성만 담당
-│   └── pdf.py                 # PDFRetrievalChain, format_docs, build_tech_retrieval_chain
+│   ├── pdf.py                 # PDFRetrievalChain, format_docs, build_tech_retrieval_chain
+│   └── pdf_parser.py          # 알고리즘 기반 학술 논문 PDF 파서 (DLA + 공간 마스킹 + 다단 정렬)
 ├── prompts/                 # 에이전트별 프롬프트 템플릿 (PromptTemplate.from_template)
 ├── outputs/                 # 평가 결과 저장 (report.md)
 ├── tests/
@@ -175,6 +186,9 @@ START
 pip install -r requirements.txt
 cp .env.example .env   # OPENAI_API_KEY, TAVILY_API_KEY 채우기
 
+# data/raw/에 원문 PDF를 넣는다. 정확한 파일 목록/파일명은
+# rag/pdf.py의 TECH_PAPER_PATHS(선정 기술 + 관련 논문 전체) /
+# SW_COMPARISON_PAPER_PATHS / HW_COMPARISON_PAPER_PATHS 참고
 
 # 전체 그래프 실행
 python app.py
