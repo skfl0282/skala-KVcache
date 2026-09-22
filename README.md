@@ -130,7 +130,7 @@ pytest tests/test_graph_smoke.py
 로 API 키 없이도 구성 여부를 확인할 수 있습니다.
 
 ## Contributors
+- 박종문 —
 - 장나리 —
-- —
-- —
-- —
+- 정서영 —
+- 한상현 —
