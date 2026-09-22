@@ -14,7 +14,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_tavily import TavilySearch
 from pydantic import BaseModel, Field
 
-from agents.prompt_utils import load_prompt
+from agents.prompt_utils import load_prompt, rag_references, web_references
 from graph.state import GraphState
 from rag.pdf import build_tech_retrieval_chain, format_docs
 
@@ -97,9 +97,9 @@ def stakeholder_eval(state: GraphState):
     references: list[str] = []
     try:
         retriever = _get_stakeholder_chain().retriever
-        rag_docs = retriever.invoke(f"{tech_sw} {tech_hw} 경쟁 기술 포지셔닝 한계")
-        retrieved_chunks = format_docs(rag_docs)
-        references.extend(_rag_references(rag_docs))
+        docs = retriever.invoke(f"{tech_sw} {tech_hw} 경쟁 기술 포지셔닝 한계")
+        retrieved_chunks = format_docs(docs)
+        references.extend(rag_references(docs))
     except Exception as e:  # TODO: data/raw/ 원문 PDF 준비 전까지의 임시 예외처리
         print(f"[WARN] RAG 체인이 아직 준비되지 않았습니다: {e}")
         retrieved_chunks = ""
@@ -107,7 +107,7 @@ def stakeholder_eval(state: GraphState):
     search_results = web_search_tool.invoke(
         {"query": f"{tech_sw} vs {tech_hw} 경쟁사 반응 개발자 반응 투자 업계 시각"}
     )
-    references.extend(_web_references(search_results))
+    references.extend(web_references(search_results))
 
     result = stakeholder_eval_chain.invoke(
         {

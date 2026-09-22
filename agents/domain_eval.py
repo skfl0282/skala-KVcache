@@ -16,7 +16,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_tavily import TavilySearch
 from pydantic import BaseModel, Field
 
-from agents.prompt_utils import load_prompt
+from agents.prompt_utils import load_prompt, rag_references, web_references
 from graph.state import GraphState
 from rag.pdf import build_tech_retrieval_chain, format_docs
 
@@ -37,31 +37,6 @@ llm = init_chat_model(MODEL_NAME, model_provider="openai", temperature=0)
 domain_eval_chain = domain_eval_prompt | llm | StrOutputParser()
 
 web_search_tool = TavilySearch(max_results=3)
-
-
-def _rag_references(docs) -> list[str]:
-    """RAG로 실제 검색된 문서들의 출처(source/page)를 REFERENCE용 문자열로 뽑는다."""
-    refs = []
-    for doc in docs:
-        source = doc.metadata.get("source")
-        if not source:
-            continue
-        page = doc.metadata.get("page")
-        refs.append(f"{source} (p.{page + 1})" if page is not None else source)
-    return refs
-
-
-def _web_references(search_results) -> list[str]:
-    """TavilySearch 응답에서 실제로 인용 가능한 출처(제목/URL)를 뽑는다."""
-    refs = []
-    if isinstance(search_results, dict):
-        for item in search_results.get("results", []):
-            url = item.get("url")
-            if not url:
-                continue
-            title = item.get("title")
-            refs.append(f"{title} - {url}" if title else url)
-    return refs
 
 
 class GradeSufficiency(BaseModel):
@@ -100,7 +75,7 @@ def domain_eval(state: GraphState):
         retriever = _get_domain_chain().retriever
         rag_docs = retriever.invoke(f"{tech_sw} {tech_hw} {domain}")
         context = format_docs(rag_docs)
-        references.extend(_rag_references(rag_docs))
+        references.extend(rag_references(rag_docs))
     except Exception as e:
         print(f"[WARN] RAG 체인이 아직 준비되지 않았습니다: {e}")
         context = ""
@@ -114,7 +89,7 @@ def domain_eval(state: GraphState):
             )
         }
     )
-    references.extend(_web_references(search_results))
+    references.extend(web_references(search_results))
 
     # 1차 평가 생성
     result = domain_eval_chain.invoke(
@@ -127,16 +102,18 @@ def domain_eval(state: GraphState):
             "supplement_search_results": "",
         }
     )
-    data_limited = list(state.get("data_limited", []))
-
     print("\n==== [CHECK DOMAIN EVAL SUFFICIENCY] ====\n")
     score = (_sufficiency_prompt | _sufficiency_grader).invoke({"eval_text": result})
+    # data_limited는 operator.add로 누적되는 채널이므로, 이 노드는 자신이
+    # 새로 추가하는 항목만 담은 리스트를 반환한다 (전체 리스트를 재구성해서
+    # 반환하면 병렬로 함께 쓰는 market_eval의 항목과 합쳐질 때 중복된다).
+    new_data_limited: list[str] = []
     if score.binary_score != "yes":
         print("==== [DECISION: INSUFFICIENT -> WEB SEARCH SUPPLEMENT] ====")
         supplement_search_results = web_search_tool.invoke(
             {"query": f"{tech_sw} {tech_hw} {domain} 비용 절감 처리 규모"}
         )
-        references.extend(_web_references(supplement_search_results))
+        references.extend(web_references(supplement_search_results))
         result = domain_eval_chain.invoke(
             {
                 "tech_sw": tech_sw,
@@ -152,7 +129,7 @@ def domain_eval(state: GraphState):
         score = (_sufficiency_prompt | _sufficiency_grader).invoke({"eval_text": result})
         if score.binary_score != "yes":
             print("==== [DECISION: STILL INSUFFICIENT AFTER SUPPLEMENT] ====")
-            data_limited.append("domain_eval")
+            new_data_limited = ["domain_eval"]
         else:
             print("==== [DECISION: SUFFICIENT AFTER SUPPLEMENT] ====")
     else:
@@ -160,7 +137,7 @@ def domain_eval(state: GraphState):
 
     return {
         "domain_eval": result,
-        "data_limited": data_limited,
+        "data_limited": new_data_limited,
         "references": list(dict.fromkeys(references)),  # 순서 유지 + 중복 제거
         "messages": [("system", "[도메인 평가 RAG] 완료")],
     }

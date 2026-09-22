@@ -9,7 +9,7 @@
 from langchain.chat_models import init_chat_model
 from langchain_core.output_parsers import StrOutputParser
 
-from agents.prompt_utils import load_prompt
+from agents.prompt_utils import load_prompt, rag_references
 from graph.state import GraphState
 from rag.pdf import (
     build_hw_comparison_retrieval_chain,
@@ -61,10 +61,15 @@ def tech_research(state: GraphState):
     tech_sw = state["tech_sw"]
     tech_hw = state["tech_hw"]
 
+    references: list[str] = []
     try:
         retriever = _get_tech_chain().retriever
-        sw_context = format_docs(retriever.invoke(tech_sw))
-        hw_context = format_docs(retriever.invoke(tech_hw))
+        sw_docs = retriever.invoke(tech_sw)
+        hw_docs = retriever.invoke(tech_hw)
+        sw_context = format_docs(sw_docs)
+        hw_context = format_docs(hw_docs)
+        references.extend(rag_references(sw_docs))
+        references.extend(rag_references(hw_docs))
     except Exception as e:  # RAG 체인 로딩 실패(PDF 누락, 인덱싱 오류 등) 시 빈 컨텍스트로 폴백
         print(f"[WARN] RAG 체인 호출 실패: {e}")
         sw_context = hw_context = ""
@@ -72,17 +77,21 @@ def tech_research(state: GraphState):
     # tech_sw/tech_hw 이름 자체는 대조 기술 원문에 등장하지 않으므로, 각 대조
     # 기술의 핵심 개념으로 직접 검색해야 논문 초록/핵심 아이디어 청크가 검색된다.
     try:
-        sw_comparison_context = format_docs(
-            _get_sw_comparison_chain().retriever.invoke("벡터 양자화 압축 기법의 핵심 아이디어")
+        sw_comparison_docs = _get_sw_comparison_chain().retriever.invoke(
+            "벡터 양자화 압축 기법의 핵심 아이디어"
         )
+        sw_comparison_context = format_docs(sw_comparison_docs)
+        references.extend(rag_references(sw_comparison_docs))
     except Exception as e:  # 대조 기술 원문(TurboQuant) 누락 시 비교 문장 생략
         print(f"[WARN] SW 대조 기술 RAG 체인 호출 실패: {e}")
         sw_comparison_context = ""
 
     try:
-        hw_comparison_context = format_docs(
-            _get_hw_comparison_chain().retriever.invoke("GPU/CPU 메모리 계층 간 동적 KV 캐시 관리 기법의 핵심 아이디어")
+        hw_comparison_docs = _get_hw_comparison_chain().retriever.invoke(
+            "GPU/CPU 메모리 계층 간 동적 KV 캐시 관리 기법의 핵심 아이디어"
         )
+        hw_comparison_context = format_docs(hw_comparison_docs)
+        references.extend(rag_references(hw_comparison_docs))
     except Exception as e:  # 대조 기술 원문(InfiniGen) 누락 시 비교 문장 생략
         print(f"[WARN] HW 대조 기술 RAG 체인 호출 실패: {e}")
         hw_comparison_context = ""
@@ -105,5 +114,6 @@ def tech_research(state: GraphState):
     return {
         "tech_research_sw": tech_research_sw,
         "tech_research_hw": tech_research_hw,
+        "references": list(dict.fromkeys(references)),  # 순서 유지 + 중복 제거
         "messages": [("system", "[기술 조사 RAG] 완료")],
     }
