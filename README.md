@@ -12,21 +12,34 @@
 - Tools : LangGraph, LangChain(`init_chat_model`), Chroma, TavilySearch
 
 ## Selected Technologies
+
 - SW : **DeepSeek-V2 (Multi-head Latent Attention, MLA)** — Key-Value를
   저랭크 latent 벡터로 공동 압축하는 어텐션 구조로, KV 캐시를 93.3%
   절감하고 8×H800 GPU 환경에서 생성 처리량 50K tokens/s 이상을 달성.
   실제 서비스 배포 및 실측 처리량 근거는 있으나 장기 상용 운영·SLA 근거는
   부족해 **추정 TRL 8**로 평가됨. 사후 압축 방식인 양자화 계열
-  (**TurboQuant** 등, 정밀도 손실·추가 연산 지연 한계) 대비 비교 평가
-  대상으로서 타당성이 높다고 판단해 선정.
+  (**TurboQuant**: 채널당 2.5~3.5비트로 압축하지만 매 스텝 양자화·역양자화
+  연산이 추가되는 한계, **KIVI**: 채널/토큰별 비대칭 2비트 양자화로 유사한
+  한계 공유) 대비, MLA는 런타임 보정 없이 아키텍처 자체에 압축을 내재화
+  했다는 점에서 비교 평가 대상으로서 타당성이 높다고 판단해 선정. KIVI는
+  이 한계가 TurboQuant만의 문제가 아님을 보여주는 보조 근거로
+  `TECH_PAPER_PATHS`에 포함.
+
 - HW : **ITME (Inference Tiered Memory Expansion with Disaggregated
   CXL-Hybrid Memories)** — CXL 하이브리드 메모리와 SSD-backed 원격 메모리를
   GPU 서버가 RDMA로 접근하게 하는 계층형 메모리 확장 아키텍처. FPGA
   프로토타입 기준 약 18GB/s 프리페칭 처리량, CPU 오프로딩 대비 최대 35.7%
   처리량 향상을 실측했으나 상용 배포 사례는 없어 **추정 TRL 5**로 평가됨.
-  GPU 내부에서 KV 캐시 자체를 줄이는 SW 접근(**InfiniGen** 등 동적 KV
-  캐시 관리 기법)과 달리 GPU 외부 메모리 용량을 TB 단위로 확장하는
-  방향이라 SW(DeepSeek-V2)와 상호 보완적 비교 대상으로 선정.
+  GPU 내부에서 KV 캐시 자체를 줄이는 SW 접근(**InfiniGen**: 중요 토큰만
+  예측해 선택적 prefetch, 기존 대비 최대 3배 개선이나 매 레이어 speculation
+  비용이 들고 근본적인 메모리 용량 부족은 우회할 뿐 해결하진 못함)과 달리
+  GPU 외부 메모리 용량 자체를 확장하는 방향이라 SW(DeepSeek-V2)와 상호
+  보완적 비교 대상으로 선정. 가장 근접한 HW 경쟁 후보였던 **PIM/CXL**
+  (CXL 메모리 내 PNM 가속기로 최대 21.9배 처리량 보고)은 성능은 더
+  화려하지만 특수 목적 CXL-PNM 하드웨어를 전제로 해 상용화 경로가 불분명,
+  ITME는 비교적 표준에 가까운 조합만으로 구현돼 재현성·상용화 경로가 더
+  명확하다고 판단해 최종 선정.
+
 - 각 기술의 대조군(SW: TurboQuant, HW: InfiniGen) 원문도 RAG 인덱스에
   포함해, `tech_research`가 "왜 이 대안을 선택하지 않았는지"를 근거 기반
   으로 한 줄 비교하도록 함 (`rag/pdf.py`의 `SW_COMPARISON_PAPER_PATHS` /
@@ -35,6 +48,7 @@
   GQA, KIVI, LIMINAL, PIMCXL, 데이터센터 인프라, SGLang, TransMLA,
   vLLM 롱컨텍스트 등 관련 논문 총 15건을 함께 인덱싱해, `domain_eval`/
   `stakeholder_eval`이 더 넓은 근거로 평가할 수 있도록 함.
+  
 
 ## Features
 - PDF 원문(선정 기술 DeepSeek-V2·ITME, 대조 기술 TurboQuant·InfiniGen,
