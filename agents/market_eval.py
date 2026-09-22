@@ -1,6 +1,6 @@
 """
 시장 평가 에이전트
-담당: __________ (TODO: 담당자 배정)
+담당: 장나리
 
 설계서 A. Agent 정의 - "시장성, 채택 현황 조사" / RAG 미적용, 웹검색만 사용.
 설계서 C. 평가 관점 - 시장 규모, CAGR, 도입 기업 수/발표 빈도 등을 기준으로 평가.
@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from agents.prompt_utils import load_prompt, web_references
 from graph.state import GraphState
 
-MODEL_NAME = "gpt-4.1-mini"
+MODEL_NAME = "gpt-5.6-luna"
 
 web_search_tool = TavilySearch(max_results=5)
 market_eval_prompt = load_prompt("prompts/market_eval.txt")

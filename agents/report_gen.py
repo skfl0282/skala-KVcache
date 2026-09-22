@@ -1,6 +1,6 @@
 """
 보고서 생성 에이전트
-담당: __________ (TODO: 담당자 배정)
+담당: 정서영
 
 설계서 A. Agent 정의 - "단계별 내용을 연결하여 보고서 생성" / RAG 미적용
 설계서 E. 평가 보고서 - 목차(초안):
@@ -17,7 +17,7 @@ from langchain_core.output_parsers import StrOutputParser
 from agents.prompt_utils import load_prompt
 from graph.state import GraphState
 
-MODEL_NAME = "gpt-4.1-mini"
+MODEL_NAME = "gpt-5.6-terra"
 
 report_gen_prompt = load_prompt("prompts/report_gen.txt")
 llm = init_chat_model(MODEL_NAME, model_provider="openai", temperature=0)
