@@ -1,6 +1,6 @@
 """
 도메인 평가 에이전트
-담당: __________ (TODO: 담당자 배정)
+담당: 정서영
 
 설계서 A. Agent 정의 - "적용 도메인별 적합성" / RAG 적용
     (데이터센터, 클라우드에서의 평가)
@@ -20,7 +20,7 @@ from agents.prompt_utils import load_prompt
 from graph.state import GraphState
 from rag.pdf import build_tech_retrieval_chain, format_docs
 
-MODEL_NAME = "gpt-4.1-mini"
+MODEL_NAME = "gpt-5.6-luna"
 
 _domain_chain = None
 
@@ -37,6 +37,31 @@ llm = init_chat_model(MODEL_NAME, model_provider="openai", temperature=0)
 domain_eval_chain = domain_eval_prompt | llm | StrOutputParser()
 
 web_search_tool = TavilySearch(max_results=3)
+
+
+def _rag_references(docs) -> list[str]:
+    """RAG로 실제 검색된 문서들의 출처(source/page)를 REFERENCE용 문자열로 뽑는다."""
+    refs = []
+    for doc in docs:
+        source = doc.metadata.get("source")
+        if not source:
+            continue
+        page = doc.metadata.get("page")
+        refs.append(f"{source} (p.{page + 1})" if page is not None else source)
+    return refs
+
+
+def _web_references(search_results) -> list[str]:
+    """TavilySearch 응답에서 실제로 인용 가능한 출처(제목/URL)를 뽑는다."""
+    refs = []
+    if isinstance(search_results, dict):
+        for item in search_results.get("results", []):
+            url = item.get("url")
+            if not url:
+                continue
+            title = item.get("title")
+            refs.append(f"{title} - {url}" if title else url)
+    return refs
 
 
 class GradeSufficiency(BaseModel):
@@ -61,41 +86,81 @@ _sufficiency_prompt = ChatPromptTemplate.from_messages(
 
 
 def domain_eval(state: GraphState):
-    """도메인 평가를 RAG로 수행하고, 부족하면 웹검색으로 1회 보완한 뒤
-    domain_eval을 write한다.
+    """도메인 평가를 RAG+웹검색으로 수행하고, 결과가 부족하면 웹검색을 1회
+    보완한 뒤 재생성한다. 보완 후에도 여전히 부족하면(재판정 기준) 그때만
+    data_limited에 "domain_eval"을 기록하고 domain_eval을 write한다.
     """
     print("\n==== [DOMAIN EVAL RAG] ====\n")
     tech_sw = state["tech_sw"]
     tech_hw = state["tech_hw"]
     domain = state["domain"]
-
+    # RAG 검색
+    references: list[str] = []
     try:
         retriever = _get_domain_chain().retriever
-        context = format_docs(retriever.invoke(f"{tech_sw} {tech_hw} {domain}"))
-    except Exception as e:  # TODO: data/raw/ 원문 PDF 준비 전까지의 임시 예외처리
+        rag_docs = retriever.invoke(f"{tech_sw} {tech_hw} {domain}")
+        context = format_docs(rag_docs)
+        references.extend(_rag_references(rag_docs))
+    except Exception as e:
         print(f"[WARN] RAG 체인이 아직 준비되지 않았습니다: {e}")
         context = ""
 
-    result = domain_eval_chain.invoke(
-        {"tech_sw": tech_sw, "tech_hw": tech_hw, "domain": domain, "retrieved_chunks": context}
+    # 웹검색은 항상 수행
+    search_results = web_search_tool.invoke(
+        {
+            "query": (
+                f"{tech_sw} {tech_hw} {domain} "
+                "scalability throughput memory cost saving TCO energy efficiency"
+            )
+        }
     )
+    references.extend(_web_references(search_results))
 
+    # 1차 평가 생성
+    result = domain_eval_chain.invoke(
+        {
+            "tech_sw": tech_sw,
+            "tech_hw": tech_hw,
+            "domain": domain,
+            "retrieved_chunks": context,
+            "search_results": search_results,
+            "supplement_search_results": "",
+        }
+    )
     data_limited = list(state.get("data_limited", []))
 
     print("\n==== [CHECK DOMAIN EVAL SUFFICIENCY] ====\n")
     score = (_sufficiency_prompt | _sufficiency_grader).invoke({"eval_text": result})
     if score.binary_score != "yes":
         print("==== [DECISION: INSUFFICIENT -> WEB SEARCH SUPPLEMENT] ====")
-        search_results = web_search_tool.invoke(
+        supplement_search_results = web_search_tool.invoke(
             {"query": f"{tech_sw} {tech_hw} {domain} 비용 절감 처리 규모"}
         )
-        result = result + f"\n[웹검색 보완]\n{search_results}"
-        data_limited.append("domain_eval")
+        references.extend(_web_references(supplement_search_results))
+        result = domain_eval_chain.invoke(
+            {
+                "tech_sw": tech_sw,
+                "tech_hw": tech_hw,
+                "domain": domain,
+                "retrieved_chunks": context,
+                "search_results": search_results,
+                "supplement_search_results": supplement_search_results,
+            }
+        )
+
+        print("\n==== [RE-CHECK DOMAIN EVAL SUFFICIENCY AFTER SUPPLEMENT] ====\n")
+        score = (_sufficiency_prompt | _sufficiency_grader).invoke({"eval_text": result})
+        if score.binary_score != "yes":
+            print("==== [DECISION: STILL INSUFFICIENT AFTER SUPPLEMENT] ====")
+            data_limited.append("domain_eval")
+        else:
+            print("==== [DECISION: SUFFICIENT AFTER SUPPLEMENT] ====")
     else:
         print("==== [DECISION: SUFFICIENT] ====")
 
     return {
         "domain_eval": result,
         "data_limited": data_limited,
+        "references": list(dict.fromkeys(references)),  # 순서 유지 + 중복 제거
         "messages": [("system", "[도메인 평가 RAG] 완료")],
     }
