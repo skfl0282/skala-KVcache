@@ -85,7 +85,7 @@
 | 보고서 생성 에이전트 | `report_gen` | X | 단계별 내용을 연결해 평가 보고서 생성 |
 
 ## Architecture
-<img width="2860" height="6928" alt="Technology Evaluation-2026-09-22-004218" src="https://github.com/user-attachments/assets/a33f6fc4-5a8d-4550-ac0b-40b7a9bab335" />
+<img width="286" height="692" alt="Technology Evaluation-2026-09-22-004218" src="https://github.com/user-attachments/assets/a33f6fc4-5a8d-4550-ac0b-40b7a9bab335" />
 
 원본 mermaid 설계도는 업로드된 설계산출물(`RAG-Design_판교-9반.pdf`) D절 참고.
 설계서 원안에는 `tech_research` 뒤에도 "충분한가?" 분기 + 웹검색 보완 노드가
