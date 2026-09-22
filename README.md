@@ -12,33 +12,51 @@
 - Tools : LangGraph, LangChain(`init_chat_model`), Chroma, TavilySearch
 
 ## Selected Technologies
-- SW : **DeepSeek-V2 (MLA)** — 어텐션 메커니즘을 재설계해 별도 사후처리 없이
-  생성 단계에서 KV Cache 크기를 93.3% 감축하는 구조적 특징을 가지며, 실제
-  대규모 상용 서비스에 적용되어 기술 성숙도가 검증됨. 사후 압축 방식인
-  양자화 계열(정밀도 손실·추가 연산 지연 한계) 대비 비교 평가 대상으로서
-  타당성이 높다고 판단해 선정.
+- SW : **DeepSeek-V2 (Multi-head Latent Attention, MLA)** — Key-Value를
+  저랭크 latent 벡터로 공동 압축하는 어텐션 구조로, KV 캐시를 93.3%
+  절감하고 8×H800 GPU 환경에서 생성 처리량 50K tokens/s 이상을 달성.
+  실제 서비스 배포 및 실측 처리량 근거가 있어 **TRL 9**로 평가됨. 사후
+  압축 방식인 양자화 계열(**TurboQuant** 등, 정밀도 손실·추가 연산 지연
+  한계) 대비 비교 평가 대상으로서 타당성이 높다고 판단해 선정.
 - HW : **ITME (Inference Tiered Memory Expansion with Disaggregated
-  CXL-Hybrid Memories)** — SK hynix의 CXL 메모리 장치 등 실제 하드웨어로
-  검증된 결과와 업계 공식 자료가 있어 신뢰도 높은 RAG 문서 풀을 구성할 수
-  있다고 판단해 선정. (InfiniGen은 SW만 개선하는 기술이라 SW/HW 대비 구도에
-  맞지 않아 제외, Scalable PNM은 시뮬레이션 기반 연구라 상용화/업계 자료
-  확보가 어려워 제외)
+  CXL-Hybrid Memories)** — CXL 하이브리드 메모리와 SSD-backed 원격 메모리를
+  GPU 서버가 RDMA로 접근하게 하는 계층형 메모리 확장 아키텍처. FPGA
+  프로토타입 기준 약 18GB/s 프리페칭 처리량, CPU 오프로딩 대비 최대 35.7%
+  처리량 향상을 실측했으나 상용 배포 사례는 없어 **추정 TRL 5**로 평가됨.
+  GPU 내부에서 KV 캐시 자체를 줄이는 SW 접근(**InfiniGen** 등 동적 KV
+  캐시 관리 기법)과 달리 GPU 외부 메모리 용량을 TB 단위로 확장하는
+  방향이라 SW(DeepSeek-V2)와 상호 보완적 비교 대상으로 선정.
+- 각 기술의 대조군(SW: TurboQuant, HW: InfiniGen) 원문도 RAG 인덱스에
+  포함해, `tech_research`가 "왜 이 대안을 선택하지 않았는지"를 근거 기반
+  으로 한 줄 비교하도록 함 (`rag/pdf.py`의 `SW_COMPARISON_PAPER_PATHS` /
+  `HW_COMPARISON_PAPER_PATHS`).
 
 ## Features
-- PDF 원문(DeepSeek-V2, ITME 논문) 기반 RAG 정보 추출 (기술 조사, 도메인 평가)
-- 웹검색 기반 시장성 · 이해관계자 반응 조사 (RAG 미적용)
-- 기술 조사 / 도메인 평가 단계에서 자료가 부족하면 `CorrectiveRAG`의
-  `GradeDocuments` 그레이더 패턴으로 충분성을 판정하고, 부족하면 자동으로
-  웹검색 보완 후 `data_limited`에 기록 → 최종 보고서 "6. 한계점"에 반영
+- PDF 원문(DeepSeek-V2, ITME 논문 + 대조 기술 TurboQuant, InfiniGen) 기반
+  RAG 정보 추출 (기술 조사, 도메인 평가, 이해관계자 평가)
+- 웹검색 기반 시장성 · 이해관계자 반응 조사
+- 기술 조사 결과에 NASA TRL 9단계 척도 기준 **기술성숙도(TRL) 평가**를
+  포함 (논문 게재/동료심사 여부, 실측 vs 시뮬레이션 검증 방식, 실제
+  서비스·제품 적용 여부를 근거로 판단)
+- 시장 / 이해관계자 / 도메인 평가 단계 모두 자료가 부족하면 `CorrectiveRAG`의
+  `GradeDocuments` 그레이더 패턴으로 충분성을 판정하고, 부족하면 웹검색
+  1회 보완 후 재생성·재판정 → 그래도 부족하면 재시도 없이 `data_limited`에
+  기록 → 최종 보고서 "한계점"에 반영
 - 관점별(시장성 / 이해관계자 / 도메인) Fan-out 병렬 평가 → 평가 종합 Fan-in
+  (`data_limited`, `references`는 `operator.add`로 누적되는 채널이라 각
+  노드가 자신의 항목만 반환)
 - 확증 편향 방지 전략 : 종합 단계에서 우열 판정 없이 관점 간 일치/상충
-  지점을 병렬 서술하도록 프롬프트 설계, 보고서 REFERENCE에는 실제로
-  활용한 자료만 기재하여 근거 추적 가능하도록 함
+  지점을 병렬 서술하도록 프롬프트 설계, 각 RAG/웹검색 노드가 실제로 인용한
+  출처만 `references`에 담아 보고서 REFERENCE 절에 그대로 반영(LLM이 자료를
+  지어내지 않도록 실제 출처 목록만 프롬프트에 전달)
 
 ## Tech Stack
 - Framework : LangGraph (`init_chat_model` 기반 LangChain 체인)
-- LLM/Generator : `gpt-4.1-mini` (TODO: 팀 확정, 각 `agents/*.py`의 `MODEL_NAME` 수정)
-- LLM/Judge : `gpt-4.1-mini` (충분성 그레이더용, TODO: 팀 확정)
+- LLM/Generator : `market_eval`/`domain_eval`/`stakeholder_eval`/`tech_research`는
+  `gpt-5.6-luna`, `synthesis`/`report_gen`은 `gpt-5.6-terra` (각 `agents/*.py`의
+  `MODEL_NAME` 참고)
+- LLM/Judge : `gpt-5.6-luna` (충분성 그레이더용, `market_eval`/`domain_eval`/
+  `stakeholder_eval` 공통)
 - Retrieval : Chroma — `{Hit Rate@K}`, `{MRR}` (TODO: 측정 후 기재)
 - Embedding : BGE-M3 (`rag/embeddings.py`) — 긴 문맥·다국어 지원, Dense/Sparse/
   Multi-vector Retrieval, MIT License 오픈소스 — 논문 중심 텍스트 검색
@@ -49,45 +67,90 @@
 
 | Agent | 노드 함수 | RAG 여부 | 역할 |
 |---|---|---|---|
-| 기술 조사 에이전트 | `tech_research` | O | 원문 2건에서 기술 개요, 범위, 한계 추출 |
-| 시장 평가 에이전트 | `market_eval` | X | 시장 규모, 상용화/채택 현황, 성장 전망 검색 |
-| 이해관계자 평가 에이전트 | `stakeholder_eval` | X | 경쟁사 반응, 개발자 평가, 투자/업계 시각 검색 |
-| 도메인 평가 에이전트 | `domain_eval` | O | 데이터센터·클라우드에서의 적용 적합성 평가 |
-| 평가 종합 에이전트 | `synthesis` | X | 관점별 의견 종합 및 비교 (일치/상충 지점 서술) |
+| 기술 조사 에이전트 | `tech_research` | O | 원문 2건에서 기술 개요·범위·한계·TRL 추출, SW/HW 대조 기술과 비교 |
+| 시장 평가 에이전트 | `market_eval` | X | 시장 규모, 상용화/채택 현황, 성장 전망 검색 (충분성 판정 + 웹검색 1회 보완) |
+| 이해관계자 평가 에이전트 | `stakeholder_eval` | O | 경쟁사 반응, 개발자 평가, 투자/업계 시각 (RAG+웹검색, 충분성 판정 + 웹검색 1회 보완) |
+| 도메인 평가 에이전트 | `domain_eval` | O | 데이터센터·클라우드에서의 적용 적합성 평가 (충분성 판정 + 웹검색 1회 보완) |
+| 평가 종합 에이전트 | `synthesis` | X | 기술 조사 + 관점별 의견 종합 및 비교 (일치/상충 지점 서술) |
 | 보고서 생성 에이전트 | `report_gen` | X | 단계별 내용을 연결해 평가 보고서 생성 |
 
 ## Architecture
 ```
 START
   └─ select_technology (기술 선정)
-       └─ tech_research (기술 조사 RAG)
-            ├─[sufficient]──────────────────────────┐
-            └─[insufficient]→ web_search_supplement_tech ┘
-                                                        ├─ market_eval (웹검색)
-                                                        ├─ stakeholder_eval (웹검색)
-                                                        └─ domain_eval (RAG, 내부 보완 루프 포함)
-                             ["market_eval","stakeholder_eval","domain_eval"] 조인
-                                          └─ synthesis (fan-in)
-                                               └─ report_gen
-                                                    └─ END
+       └─ tech_research (기술 조사 RAG + SW/HW 대조 기술 비교 + TRL 평가)
+            ├─ market_eval (웹검색, 내부 충분성 체크 + 보완 루프 포함)
+            ├─ stakeholder_eval (RAG + 웹검색, 내부 충분성 체크 + 보완 루프 포함)
+            └─ domain_eval (RAG + 웹검색, 내부 충분성 체크 + 보완 루프 포함)
+                 ["market_eval","stakeholder_eval","domain_eval"] 조인
+                              └─ synthesis (fan-in, 기술 조사 결과도 함께 입력)
+                                   └─ report_gen
+                                        └─ END
 ```
 원본 mermaid 설계도는 업로드된 설계산출물(`RAG-Design_판교-9반.pdf`) D절 참고.
-`graph/build_graph.py` 상단 docstring에 설계서 대비 단순화한 지점
-(도메인 평가의 충분성 체크를 별도 그래프 노드 대신
-노드 내부 로직으로 처리한 이유)을 설명해 두었다.
+설계서 원안에는 `tech_research` 뒤에도 "충분한가?" 분기 + 웹검색 보완 노드가
+그래프 레벨로 그려져 있었으나, 팀 논의 후 그래프에서 완전히 제거하고
+`tech_research`가 RAG 조사 결과를 바로 3개 평가 노드로 fan-out하도록
+단순화했다. 시장/이해관계자/도메인 평가의 충분성 체크 + 웹검색 보완
+루프는 `graph/build_graph.py` 상단 docstring에 설명된 대로 그래프 레벨
+분기 대신 각 노드(`market_eval.py`, `stakeholder_eval.py`,
+`domain_eval.py`) 내부 로직으로 처리한다.
+
+## Example Output (`python app.py` 실행 결과)
+아래는 `outputs/report.md`에 실제로 생성된 결과 발췌다 (기획 의도가 실제로
+구현·동작한다는 근거).
+
+- **TRL 평가 구현 → 실제 결과**: `tech_research` 프롬프트에 TRL 평가
+  지시를 추가한 결과, "4.1 기술 성숙도 평가"에 아래처럼 등급과 판단 근거,
+  실측 수치가 표로 정리되어 출력된다.
+  > | 구분 | DeepSeek-V2 MLA | ITME |
+  > |---|---|---|
+  > | 기술성숙도 | TRL 9 | 추정 TRL 5 |
+  > | 주요 확인 수치 | KV 캐시 93.3% 감소, 128K 컨텍스트, 50K tokens/s 이상 생성 처리량 | 프리페칭 시 약 18GB/s, CPU 오프로딩 대비 최대 35.7% 처리량 향상 |
+
+- **SW/HW 대조 기술 비교 구현 → 실제 결과**: `tech_research`가 검색한
+  대조 기술(TurboQuant/InfiniGen) 발췌를 근거로, "기술 개요" 항목 안에
+  실제로 비교 문장이 포함된다.
+  > MLA는 TurboQuant와 구별된다. TurboQuant가 고차원 벡터를 저비트 정수로
+  > 양자화하여 압축하는 방식이라면, MLA는 어텐션의 Key-Value 표현을
+  > 저랭크 latent 구조로 공동 압축하는 아키텍처 수준의 방식이다.
+
+- **`market_eval`/`stakeholder_eval`/`domain_eval` 충분성 판정 + 웹검색
+  보완 구현 → 실제 결과**: 근거가 부족한 항목은 추정하지 않고 "확인되지
+  않음"으로 명시되며, 실제 도입 사례 수 등은 표로 정리된다.
+  > | 구분 | 확인 가능한 공개 도입 사례 |
+  > |---|---:|
+  > | DeepSeek-V2/MLA | 0건 |
+  > | ITME | 0건 |
+  >
+  > 위 수치는 실제 도입이 없다는 의미가 아니라, 제공된 자료에서 검증
+  > 가능한 공개 도입 사례가 없다는 의미다.
+
+- **`references` 실제 출처 수집 구현 → 실제 결과**: REFERENCE 절에
+  생성형 LLM이 지어낸 문장이 아니라, RAG로 검색된 실제 원문 파일과 각
+  자료가 어디에 쓰였는지가 그대로 출력된다.
+  ```
+  1. DeepSeek-V2: A Strong, Economical, and Efficient MoE Language Model — data/raw/DeepSeek-V2.pdf
+     - 활용 범위: MLA 구조, KV 캐시 감소, 컨텍스트 길이, 실제 서비스 배포 및 처리량 관련 근거
+  2. ITME: Inference Tiered Memory Expansion ... — data/raw/ITME.pdf
+     - 활용 범위: ITME 아키텍처, CXL 하이브리드 메모리, FPGA 프로토타입 및 성능 평가 근거
+  3. TurboQuant — data/raw/TurboQuant.pdf
+     - 활용 범위: MLA와 양자화 기반 벡터 압축 방식의 구조적 차이 비교
+  4. InfiniGen — data/raw/InfiniGen.pdf
+     - 활용 범위: CPU 메모리 KV 캐시 오프로딩·프리페칭 방식과 ITME의 차이 비교
+  ```
 
 ## Directory Structure
 ```
 ├── data/
-│   ├── raw/                # 원문 PDF (DeepSeek-V2, ITME 논문)
-│   └── processed/          # Chroma 인덱스 캐시 (.cache/)
+│   └── raw/                # 원문 PDF (DeepSeek-V2, ITME 논문 + 대조 기술 TurboQuant, InfiniGen)
 ├── graph/
 │   ├── state.py             # GraphState(TypedDict + Annotated 설명)
 │   └── build_graph.py       # 노드/엣지 배선
 ├── agents/                  # Agent별 노드 함수 (담당자별로 분담)
 │   ├── prompt_utils.py       # prompts/*.txt -> PromptTemplate 로더
 │   ├── tech_selector.py      # select_technology
-│   ├── tech_research.py      # tech_research, route_after_tech_research, web_search_supplement_tech
+│   ├── tech_research.py      # tech_research (SW/HW 조사 + 대조 기술 비교 + TRL)
 │   ├── market_eval.py        # market_eval
 │   ├── stakeholder_eval.py   # stakeholder_eval
 │   ├── domain_eval.py        # domain_eval
@@ -112,8 +175,6 @@ START
 pip install -r requirements.txt
 cp .env.example .env   # OPENAI_API_KEY, TAVILY_API_KEY 채우기
 
-# 원문 PDF 2건을 data/raw/deepseek_v2.pdf, data/raw/itme.pdf 로 저장
-# (rag/pdf.py의 TECH_PAPER_PATHS와 파일명을 맞출 것)
 
 # 전체 그래프 실행
 python app.py
@@ -130,7 +191,7 @@ pytest tests/test_graph_smoke.py
 로 API 키 없이도 구성 여부를 확인할 수 있습니다.
 
 ## Contributors
-- 박종문 —
-- 장나리 —
-- 정서영 —
-- 한상현 —
+- 박종문 — RAG수집, 정리, synthesis agent개발, 발표
+- 장나리 — 기술 조사 에이전트 및 시장 조사 에이전트 개발
+- 정서영 — 도메인 평가 에이전트, 이해관계자 평가 에이전트, 보고서 작성 에이전트 구현
+- 한상현 — PDF Parsing
