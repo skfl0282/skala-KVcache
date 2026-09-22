@@ -175,7 +175,7 @@
 │   ├── domain_eval.py        # domain_eval
 │   ├── synthesis.py          # synthesis
 │   └── report_gen.py         # report_gen
-├── rag/                     # RAG 공통 모듈 (실습자료 20-RAG/rag/ 구조를 따르되, retriever까지만 책임)
+├── rag/                     # RAG 공통 모듈
 │   ├── embeddings.py          # create_bge_m3_embeddings()
 │   ├── base.py                # RetrievalChain (ABC) - 원문 로딩~retriever 생성만 담당
 │   ├── pdf.py                 # PDFRetrievalChain, format_docs, build_tech_retrieval_chain
