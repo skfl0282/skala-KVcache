@@ -72,12 +72,29 @@
   Multi-vector Retrieval, MIT License 오픈소스 — 논문 중심 텍스트 검색
   적합성/구현 난이도/연산 자원/라이선스를 종합 고려해 선정
 
+## RAG 흐름
+1. **PDF → 텍스트 추출** (`rag/pdf_parser.py`, 실패 시 `PDFPlumberLoader` 폴백)
+   - 자체 파서를 1차로 쓰고, 실패하면 기본 PDF 로더로 폴백
+   - Figure/Table 영역은 캡션과 함께 고해상도 이미지로 따로 저장하고, 본문에서는 그 영역을 마스킹해서 제외
+   - 표는 셀 단위로 추출해 마크다운 표로 변환, 본문 하단에 첨부
+   - 2단 컬럼 논문의 읽기 순서를 자동 판별해서 올바르게 재정렬
+   - 수식은 KaTeX 형식으로 정규화, 줄바꿈에 끊긴 하이픈 단어도 복원
+   - 결과: PDF 한 페이지가 문서 하나로 변환되고, 출처(파일명)·페이지 번호·표/그림 목록이 메타데이터로 붙음
+2. **청킹** — 1200자 단위, 200자씩 겹치게 분할
+3. **임베딩** — BGE-M3 모델 사용, 정규화된 벡터로 변환 (코사인 유사도 계산 전제)
+4. **벡터 저장** (`rag/base.py`)
+   - 로컬 Chroma에 영구 저장
+   - 용도별로 컬렉션을 분리: 메인 원문(DeepSeek-V2, ITME + 관련 논문) / SW 대조 기술(TurboQuant) / HW 대조 기술(InfiniGen)
+   - 같은 컬렉션에 이미 데이터가 있으면 재삽입하지 않고 기존 인덱스를 재사용 → 여러 에이전트가 같은 풀을 반복 호출해도 중복 임베딩 안 됨
+5. **검색** — 코사인 유사도 기반, 메인 풀은 상위 8개, 대조 기술 풀은 상위 4개 청크를 가져옴. 각 에이전트가 자기 목적에 맞는 쿼리로 검색
+6. **프롬프트 주입** — 검색된 청크를 출처/페이지 정보가 보존된 형태로 묶어서 각 에이전트 프롬프트의 컨텍스트 자리에 넣고, 그 위에서 LLM이 최종 평가/조사 텍스트를 생성
+
 ## Agents
 설계서 A. Agent 정의 기준.
 
 | Agent | 노드 함수 | RAG 여부 | 역할 |
 |---|---|---|---|
-| 기술 조사 에이전트 | `tech_research` | O | 원문 2건에서 기술 개요·범위·한계·TRL 추출, SW/HW 대조 기술과 비교 |
+| 기술 조사 에이전트 | `tech_research` | O | 원문 15건 풀에서 기술 개요·범위·한계·TRL 추출, SW/HW 대조 기술과 비교 |
 | 시장 평가 에이전트 | `market_eval` | X | 시장 규모, 상용화/채택 현황, 성장 전망 검색 (충분성 판정 + 웹검색 1회 보완) |
 | 이해관계자 평가 에이전트 | `stakeholder_eval` | O | 경쟁사 반응, 개발자 평가, 투자/업계 시각 (RAG+웹검색, 충분성 판정 + 웹검색 1회 보완) |
 | 도메인 평가 에이전트 | `domain_eval` | O | 데이터센터·클라우드에서의 적용 적합성 평가 (충분성 판정 + 웹검색 1회 보완) |
@@ -110,45 +127,42 @@ START
 아래는 `outputs/report.md`에 실제로 생성된 결과 발췌다 (기획 의도가 실제로
 구현·동작한다는 근거).
 
-- **TRL 평가 구현 → 실제 결과**: `tech_research` 프롬프트에 TRL 평가
-  지시를 추가한 결과, "4.1 기술 성숙도 평가"에 아래처럼 등급과 판단 근거,
-  실측 수치가 표로 정리되어 출력된다.
+- **TRL 평가 구현 → 실제 결과**: "4.1 기술 성숙도 관점"에 등급, 검증
+  근거, 미확인 사항까지 표로 정리되어 출력된다.
   > | 구분 | DeepSeek-V2 MLA | ITME |
   > |---|---|---|
-  > | 기술성숙도 | TRL 9 | 추정 TRL 5 |
-  > | 주요 확인 수치 | KV 캐시 93.3% 감소, 128K 컨텍스트, 50K tokens/s 이상 생성 처리량 | 프리페칭 시 약 18GB/s, CPU 오프로딩 대비 최대 35.7% 처리량 향상 |
+  > | 추정 TRL | TRL 8 | TRL 5 |
+  > | 검증 근거 | 실제 DeepSeek 서비스 환경에서 8개 H800 GPU 기준 처리량 측정 제시 | FPGA 프로토타입 및 LLM 추론 워크로드 기반 실험 |
+  > | 주요 미확인 사항 | 장기간 대규모 상용 운용, SLA, 멀티테넌트 지연시간 | 상용 서비스, 제품화, 대규모 운영, 표준화 및 장기 안정성 |
 
-- **SW/HW 대조 기술 비교 구현 → 실제 결과**: `tech_research`가 검색한
-  대조 기술(TurboQuant/InfiniGen) 발췌를 근거로, "기술 개요" 항목 안에
-  실제로 비교 문장이 포함된다.
-  > MLA는 TurboQuant와 구별된다. TurboQuant가 고차원 벡터를 저비트 정수로
-  > 양자화하여 압축하는 방식이라면, MLA는 어텐션의 Key-Value 표현을
-  > 저랭크 latent 구조로 공동 압축하는 아키텍처 수준의 방식이다.
+- **SW/HW 결합 아키텍처 제안 → 실제 결과**: "4.4 도메인 적용 관점"에서
+  두 기술을 GPU HBM부터 원격 스토리지까지 계층별로 배치하는 구체적인
+  아키텍처까지 함께 제시된다.
+  > | 계층 | 권장 데이터 배치 |
+  > |---|---|
+  > | T1: GPU HBM | 현재 실행 레이어, 활성 expert, hot KV cache |
+  > | T3.5: ITME CXL 하이브리드 메모리 | 장기 KV/context, prefix cache, 저빈도 가중치 |
+  > | T4: 원격 공유 스토리지 | cold archive, 낮은 접근 빈도의 상태 |
 
-- **`market_eval`/`stakeholder_eval`/`domain_eval` 충분성 판정 + 웹검색
-  보완 구현 → 실제 결과**: 근거가 부족한 항목은 추정하지 않고 "확인되지
-  않음"으로 명시되며, 실제 도입 사례 수 등은 표로 정리된다.
-  > | 구분 | 확인 가능한 공개 도입 사례 |
-  > |---|---:|
-  > | DeepSeek-V2/MLA | 0건 |
-  > | ITME | 0건 |
-  >
-  > 위 수치는 실제 도입이 없다는 의미가 아니라, 제공된 자료에서 검증
-  > 가능한 공개 도입 사례가 없다는 의미다.
+- **시장/이해관계자 평가에서 근거 없는 수치 추정 방지 → 실제 결과**:
+  확인되지 않은 항목은 임의로 채우지 않고 "근거 부족"/"추가 검증 필요"로
+  명시된다.
+  > 두 기술 모두 독립적인 시장 규모 및 CAGR 자료가 없어 정량적 시장성
+  > 판단에는 **근거 부족**이 있다.
 
 - **`references` 실제 출처 수집 구현 → 실제 결과**: REFERENCE 절에
-  생성형 LLM이 지어낸 문장이 아니라, RAG로 검색된 실제 원문 파일과 각
-  자료가 어디에 쓰였는지가 그대로 출력된다.
+  생성형 LLM이 지어낸 설명이 아니라, RAG로 검색된 실제 원문 페이지와
+  실제 웹검색 URL이 그대로 출력된다.
   ```
-  1. DeepSeek-V2: A Strong, Economical, and Efficient MoE Language Model — data/raw/DeepSeek-V2.pdf
-     - 활용 범위: MLA 구조, KV 캐시 감소, 컨텍스트 길이, 실제 서비스 배포 및 처리량 관련 근거
-  2. ITME: Inference Tiered Memory Expansion ... — data/raw/ITME.pdf
-     - 활용 범위: ITME 아키텍처, CXL 하이브리드 메모리, FPGA 프로토타입 및 성능 평가 근거
-  3. TurboQuant — data/raw/TurboQuant.pdf
-     - 활용 범위: MLA와 양자화 기반 벡터 압축 방식의 구조적 차이 비교
-  4. InfiniGen — data/raw/InfiniGen.pdf
-     - 활용 범위: CPU 메모리 KV 캐시 오프로딩·프리페칭 방식과 ITME의 차이 비교
+  - data/raw/DeepSeek-V2.pdf (p.1)
+  - data/raw/ITME.pdf (p.2)
+  - data/raw/TurboQuant.pdf (p.1)
+  - data/raw/InfiniGen.pdf (p.9)
+  - ITME: Inference Tiered Memory Expansion ... - https://arxiv.org/html/2606.12556
+  - DeepSeek-V2: A Strong, Economical, and Efficient Mixture- ... - https://huggingface.co/papers/2405.04434
   ```
+  (fan-out 노드들이 각자 검색한 출처를 병합만 하고 있어 위 목록에 중복이
+  남아있는 것은 알려진 한계 — `report_gen`에서 전역 dedupe 필요)
 
 ## Directory Structure
 ```
