@@ -15,6 +15,10 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
+# LangSmith 추적: API 키와 추적 on/off는 .env에서 읽고, 프로젝트 이름만 여기서 정한다
+# (.env에 LANGSMITH_PROJECT가 있으면 그 값을 쓴다)
+os.environ.setdefault("LANGSMITH_PROJECT", "SKALA-KVCACHE")
+
 from agents.tech_selector import DEFAULT_DOMAIN, DEFAULT_TECH_HW, DEFAULT_TECH_SW
 from graph.build_graph import build_graph
 
@@ -57,7 +61,9 @@ def main() -> None:
         "data_limited": [],
     }
 
-    final_state = app.invoke(initial_state)
+    final_state = app.invoke(
+        initial_state, config={"run_name": "kv-cache-eval", "tags": ["app"]}
+    )
 
     print("=" * 60)
     print("실행 완료. 최종 보고서는 outputs/report.md 에 저장되었습니다.")

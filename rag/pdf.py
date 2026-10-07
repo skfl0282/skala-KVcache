@@ -7,6 +7,7 @@
 담당: __________ (TODO: 담당자 배정)
 """
 
+import threading
 from functools import lru_cache
 from typing import Annotated
 
@@ -110,17 +111,37 @@ def build_hw_comparison_retrieval_chain(
 
 # --- 에이전트 공용 캐시. tech_research / domain_eval / stakeholder_eval이
 # 모듈마다 따로 체인을 만들면 같은 컬렉션을 3번 여는 셈이라, 프로세스당
-# 한 번만 만들어 공유한다. ---
+# 한 번만 만들어 공유한다. 병렬로 도는 노드들이 동시에 처음 호출하면
+# lru_cache만으로는 체인이 여러 번 만들어지므로(임베딩 모델 중복 로딩,
+# 같은 문서 중복 인덱싱) 생성 구간을 락으로 직렬화한다. ---
+_chain_lock = threading.Lock()
+
+
 @lru_cache(maxsize=1)
-def get_tech_retrieval_chain() -> PDFRetrievalChain:
+def _tech_retrieval_chain() -> PDFRetrievalChain:
     return build_tech_retrieval_chain()
 
 
 @lru_cache(maxsize=1)
-def get_sw_comparison_retrieval_chain() -> PDFRetrievalChain:
+def _sw_comparison_retrieval_chain() -> PDFRetrievalChain:
     return build_sw_comparison_retrieval_chain()
 
 
 @lru_cache(maxsize=1)
-def get_hw_comparison_retrieval_chain() -> PDFRetrievalChain:
+def _hw_comparison_retrieval_chain() -> PDFRetrievalChain:
     return build_hw_comparison_retrieval_chain()
+
+
+def get_tech_retrieval_chain() -> PDFRetrievalChain:
+    with _chain_lock:
+        return _tech_retrieval_chain()
+
+
+def get_sw_comparison_retrieval_chain() -> PDFRetrievalChain:
+    with _chain_lock:
+        return _sw_comparison_retrieval_chain()
+
+
+def get_hw_comparison_retrieval_chain() -> PDFRetrievalChain:
+    with _chain_lock:
+        return _hw_comparison_retrieval_chain()
