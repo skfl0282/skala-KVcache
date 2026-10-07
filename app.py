@@ -100,7 +100,7 @@ def main() -> None:
             print(f"   (오류: {review['error']})")
         for c in review.get("criteria", []):
             print(f"   {'[통과]' if c['passed'] else '[미달]'} {c['name']}: {c['comment']}")
-    print(" - 저장된 최종 보고서    : outputs/report_orchestrator_workers.md")
+    print(" - 저장된 최종 보고서    : outputs/report.md, outputs/report.pdf, outputs/report_orchestrator_workers.md")
     print("=" * 70 + "\n")
 
     report_content = final_state.get("report", "(보고서가 비어 있습니다)")

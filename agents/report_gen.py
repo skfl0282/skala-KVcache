@@ -12,6 +12,7 @@ from langchain.chat_models import init_chat_model
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 
+from agents.report_pdf import save_report_pdf
 from agents.synthesis import collect_limitations, collect_references
 from agents.worker_utils import PLANNER_MODEL
 from graph.state import GraphState, ReportState
@@ -53,29 +54,29 @@ def results_of(state: GraphState, worker: str, target: Optional[str] = None) -> 
         and task["status"] == "done"
         and (target is None or task.get("target") == target)
     ]
-    return "\n\n".join(parts) or "근거 부족 (조사 결과 없음)"
+    return "\n\n".join(parts) if parts else "조사 결과 없음"
 
 
 def report_inputs(state: GraphState) -> dict:
-    """보고서와 품질 평가가 함께 쓰는 근거 자료."""
-    limitations = collect_limitations(state["tasks"])
-    references = collect_references(state)
+    """프롬프트의 모든 채움 자리를 State에서 읽어 사전으로 만든다."""
     return {
         "tech_sw": state["tech_sw"],
         "tech_hw": state["tech_hw"],
         "domain": state["domain"],
-        "tech_research_sw": results_of(state, "tech_research", "sw"),
-        "tech_research_hw": results_of(state, "tech_research", "hw"),
+        "tech_sw_research": results_of(state, "tech_research", "sw"),
+        "tech_hw_research": results_of(state, "tech_research", "hw"),
         "market_eval": results_of(state, "market_eval"),
         "stakeholder_eval": results_of(state, "stakeholder_eval"),
         "domain_eval": results_of(state, "domain_eval"),
-        "synthesis": state.get("synthesis", ""),
-        "data_limited": "\n".join(f"- {item}" for item in limitations) or "없음",
-        "references": "\n".join(f"- {ref}" for ref in references) or "없음",
+        "synthesis": state.get("synthesis") or "종합 결과 없음",
+        "limitations": collect_limitations(state),
+        "references": collect_references(state),
     }
 
 
 def report_gen(state: ReportState) -> dict:
+    """워커들의 조사 결과와 Synthesizer의 종합을 엮어 마크다운 보고서를 작성한다.
+    품질 검사 피드백이 있으면 반영해 개정(Revision)한다."""
     revision = state.get("revision", 0) + 1
     review = state.get("review") or {}
     print(f"\n==== [REPORT GEN] {revision}번째 작성 ====")
@@ -89,6 +90,15 @@ def report_gen(state: ReportState) -> dict:
     )
 
     os.makedirs("outputs", exist_ok=True)
+    # 기존 report.md와 오케스트레이터 전용 경로 둘 다 기록
+    Path("outputs/report.md").write_text(report, encoding="utf-8")
     Path(REPORT_PATH).write_text(report, encoding="utf-8")
-    print(f"{REPORT_PATH} 저장 완료")
-    return {"report": report, "revision": revision}
+    print(f"{REPORT_PATH} 및 outputs/report.md 저장 완료")
+
+    pages = save_report_pdf(report, "outputs/report.pdf")
+    print(f"outputs/report.pdf 저장 완료 ({pages}쪽)")
+
+    return {
+        "report": report,
+        "revision": revision,
+    }

@@ -1,16 +1,34 @@
 """
-Orchestrator 노드 모듈 (전문 워커 버전)
-입력된 SW/HW 기술 및 도메인을 분석해 전문 워커별 병렬 태스크 계획을 수립한다.
+Orchestrator 에이전트
+
+흐름: 실행 전에 한 번 LLM이 전체 평가를 task N개로 나누고, task마다 담당 전문 워커
+(tech_research / market_eval / stakeholder_eval / domain_eval)를 지정한다.
+-> 계획이 네 관점 각각에서 SW와 HW를 모두 다루는지 코드가 확인하고, 빠진 부분은 기본 task로 보완
+-> task_id, status 같은 제어 값은 LLM이 아니라 코드가 붙인다
+-> assign_workers가 task마다 해당 워커로 Send (워커로 가는 고정 엣지 없음, Dynamic Fan-out)
+
+계획 생성 자체가 실패하면 DEFAULT_PLAN으로 대체하고, 그 사실을 decisions에 기록한다.
+평가 기준은 워커 프롬프트(prompts/*.txt)에 있으므로 Orchestrator는 분할 방식과 집중할 내용만 정한다.
 """
 
 import os
 from typing import List, Literal, Optional
+
 from langchain.chat_models import init_chat_model
+from langgraph.types import Send
 from pydantic import BaseModel, Field
 
 from graph.state import GraphState, WorkerName
 
-PLANNER_MODEL = os.getenv("PLANNER_MODEL", os.getenv("MODEL_NAME", "gpt-5.6-luna"))
+PLANNER_MODEL = os.getenv("PLANNER_MODEL", os.getenv("MODEL_NAME", "gpt-5.6-terra"))
+
+# 워커와 보고서 평가 관점의 대응. 종합의견은 워커가 아니라 Synthesizer가 맡는다
+VIEWPOINTS = {
+    "tech_research": "기술성숙도 관점",
+    "market_eval": "시장성 관점",
+    "stakeholder_eval": "이해관계자 관점",
+    "domain_eval": "도메인 적용 관점",
+}
 
 
 class PlannedTask(BaseModel):
@@ -30,31 +48,18 @@ class Plan(BaseModel):
     reason: str = Field(description="이렇게 계획한 이유 1~2문장")
 
 
-# 워커와 보고서 평가 관점의 대응. 종합의견은 워커가 아니라 Synthesizer가 맡는다
-VIEWPOINTS = {
-    "tech_research": "기술성숙도 관점",
-    "market_eval": "시장성 관점",
-    "stakeholder_eval": "이해관계자 관점",
-    "domain_eval": "도메인 적용 관점",
-}
+PLAN_PROMPT = """당신은 KV Cache 최적화 기술 평가의 계획을 세우는 수석 아키텍트입니다.
+이번에 평가할 두 기술과 대상 도메인을 바탕으로, 최종 보고서의 네 평가 관점을 균형 있게
+조사하기 위한 하위 task 목록을 계획해 주세요.
 
-PLAN_PROMPT = """당신은 KV cache 최적화 기술 평가를 조율하는 Orchestrator입니다.
-아래 두 기술을 평가하기 위해, 서로 '독립적으로' 병렬 수행할 수 있는 task로 분해하고
-task마다 담당 워커를 지정하세요.
-이 평가의 목적은 두 기술의 우열을 가리거나 하나를 추천하는 것이 아니라, 관점별로 각 기술의 특성과
-근거를 정리하는 것입니다. 어느 한쪽에 유리한 근거만 찾도록 task를 짜지 마세요.
-
+[평가 대상]
 - SW 기술: {tech_sw}
 - HW 기술: {tech_hw}
-- 평가 도메인: {domain}
+- 적용 도메인: {domain}
 
-[최종 보고서의 평가 관점]
-보고서의 "관점별 평가"는 아래 다섯 관점으로 구성됩니다. 계획은 이 관점들을 채울 근거를 모으기 위한 것입니다.
-앞의 네 관점은 관점마다 정해진 워커가 조사하고, 종합의견은 워커 결과가 모인 뒤 따로 작성됩니다.
-
-1. 기술성숙도 관점 ← tech_research 워커
-   원문 논문에서 기술 개요, 적용 범위, 한계를 추출하고 TRL(Technology Readiness Level) 9단계 척도로
-   성숙도를 추정. 공개 정보 기반 추정이며 논문 발표 시점과 실제 채택 간 시차가 있다는 점을 다룸.
+[보고서의 네 평가 관점과 담당 워커]
+1. 기술성숙도 관점 ← tech_research 워커 (원문 논문/스펙 RAG)
+   SW 기술과 HW 기술 각각의 성숙도(TRL 9단계 기준 추정), 기술 원리, 적용 범위, 기술적 한계를 조사.
    한 번에 한 기술만 처리(target 필수)
 2. 시장성 관점 ← market_eval 워커 (웹검색)
    ① 시장 규모·성장성(시장 리포트, 산업 뉴스) ② 상용화·채택 현황(실제 도입 사례, 제품 출시 발표)
@@ -172,6 +177,8 @@ def _label(task: dict) -> str:
 
 
 def orchestrator(state: GraphState) -> dict:
+    """tech_sw / tech_hw / domain을 읽어 task 계획을 세우고 tasks, decisions를 write한다."""
+    print("\n==== [ORCHESTRATOR] ====\n")
     names = {"tech_sw": state["tech_sw"], "tech_hw": state["tech_hw"], "domain": state["domain"]}
     try:
         planner_llm = init_chat_model(PLANNER_MODEL, model_provider="openai", temperature=0)
@@ -226,3 +233,20 @@ def orchestrator(state: GraphState) -> dict:
             }
         ],
     }
+
+
+def assign_workers(state: GraphState):
+    """계획된 task마다 task에 적힌 워커로 Send한다 (orchestrator 뒤 조건부 엣지의 라우팅 함수).
+    각 워커에는 전체 State가 아니라 자기 task와 입력값만 전달된다."""
+    return [
+        Send(
+            task["worker"],
+            {
+                "task": task,
+                "tech_sw": state["tech_sw"],
+                "tech_hw": state["tech_hw"],
+                "domain": state["domain"],
+            },
+        )
+        for task in state["tasks"].values()
+    ]
