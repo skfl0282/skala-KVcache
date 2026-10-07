@@ -74,3 +74,25 @@ class WorkerInput(TypedDict):
     tech_sw: str
     tech_hw: str
     domain: str
+
+
+MAX_REVISIONS = 2  # 보고서 재작성 상한 (최초 작성 1회 + 재작성 최대 2회)
+
+
+class CriterionResult(TypedDict):
+    name: str        # 평가 항목
+    passed: bool
+    comment: str     # 판정 근거 / 미달 사유
+
+
+class ReportReview(TypedDict):
+    passed: bool                       # 모든 항목 통과 여부
+    criteria: List[CriterionResult]
+    feedback: str                      # 재작성 시 보고서 생성에 넘길 수정 지시
+    error: Optional[str]               # 평가 자체가 실패한 경우의 사유
+
+
+class ReportState(GraphState):
+    report: str
+    review: ReportReview
+    revision: int

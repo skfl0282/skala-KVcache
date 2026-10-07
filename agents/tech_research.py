@@ -1,94 +1,58 @@
 """
-기술 조사 에이전트 (RAG 적용)
-담당: 장나리
-
-설계서 A. Agent 정의 - "원문에서 기술 개요, 범위, 한계 추출"
-설계서 D. Graph 설계 - tech_research_sw / tech_research_hw를 write한다.
+기술 조사 전문 워커 (tech_research)
+원문 논문 RAG 및 대조 기술 RAG를 수행하여 기술성숙도(TRL 등급 및 근거)를 분석한다.
 """
 
 from langchain.chat_models import init_chat_model
 from langchain_core.output_parsers import StrOutputParser
 
-from agents.prompt_utils import load_prompt, rag_references
-from graph.state import GraphState
+from agents.worker_utils import (
+    WORKER_MODEL,
+    join_errors,
+    load_worker_prompt,
+    run_with_retry,
+    search_rag,
+)
+from graph.state import WorkerInput
 from rag.pdf import (
-    format_docs,
     get_hw_comparison_retrieval_chain,
     get_sw_comparison_retrieval_chain,
     get_tech_retrieval_chain,
 )
 
-MODEL_NAME = "gpt-5.6-luna"
+worker_llm = init_chat_model(WORKER_MODEL, model_provider="openai", temperature=0)
+tech_research_chain = (
+    load_worker_prompt("prompts/tech_research.txt") | worker_llm | StrOutputParser()
+)
 
-tech_research_prompt = load_prompt("prompts/tech_research.txt")
-llm = init_chat_model(MODEL_NAME, model_provider="openai", temperature=0)
-tech_research_chain = tech_research_prompt | llm | StrOutputParser()
 
+def _tech_research_once(state: WorkerInput):
+    """원문 RAG + 대조 기술 RAG. 원문이 없으면 실패."""
+    task = state["task"]
+    is_sw = task.get("target") != "hw"
+    tech_name = state["tech_sw"] if is_sw else state["tech_hw"]
 
-def tech_research(state: GraphState):
-    """DeepSeek-V2(MLA), ITME 원문 PDF를 RAG로 검색해 기술 개요/범위/한계를
-    추출하고 tech_research_sw, tech_research_hw를 write한다.
-    """
-    print("\n==== [TECH RESEARCH RAG] ====\n")
-    tech_sw = state["tech_sw"]
-    tech_hw = state["tech_hw"]
+    chunks, refs, error = search_rag(get_tech_retrieval_chain, tech_name)
+    if not chunks:
+        return None, [], error
 
-    references: list[str] = []
-    data_limited: list[str] = []
-    try:
-        retriever = get_tech_retrieval_chain().retriever
-        sw_docs = retriever.invoke(tech_sw)
-        hw_docs = retriever.invoke(tech_hw)
-        sw_context = format_docs(sw_docs)
-        hw_context = format_docs(hw_docs)
-        references.extend(rag_references(sw_docs))
-        references.extend(rag_references(hw_docs))
-    except Exception as e:  # RAG 체인 로딩 실패(PDF 누락, 인덱싱 오류 등) 시 빈 컨텍스트로 폴백
-        print(f"[WARN] RAG 체인 호출 실패: {e}")
-        sw_context = hw_context = ""
-        data_limited.append("tech_research (RAG 검색 실패)")
-
-    # tech_sw/tech_hw 이름 자체는 대조 기술 원문에 등장하지 않으므로, 각 대조
-    # 기술의 핵심 개념으로 직접 검색해야 논문 초록/핵심 아이디어 청크가 검색된다.
-    try:
-        sw_comparison_docs = get_sw_comparison_retrieval_chain().retriever.invoke(
-            "벡터 양자화 압축 기법의 핵심 아이디어"
-        )
-        sw_comparison_context = format_docs(sw_comparison_docs)
-        references.extend(rag_references(sw_comparison_docs))
-    except Exception as e:  # 대조 기술 원문(TurboQuant) 누락 시 비교 문장 생략
-        print(f"[WARN] SW 대조 기술 RAG 체인 호출 실패: {e}")
-        sw_comparison_context = ""
-
-    try:
-        hw_comparison_docs = get_hw_comparison_retrieval_chain().retriever.invoke(
-            "GPU/CPU 메모리 계층 간 동적 KV 캐시 관리 기법의 핵심 아이디어"
-        )
-        hw_comparison_context = format_docs(hw_comparison_docs)
-        references.extend(rag_references(hw_comparison_docs))
-    except Exception as e:  # 대조 기술 원문(InfiniGen) 누락 시 비교 문장 생략
-        print(f"[WARN] HW 대조 기술 RAG 체인 호출 실패: {e}")
-        hw_comparison_context = ""
-
-    tech_research_sw = tech_research_chain.invoke(
+    get_comparison = (
+        get_sw_comparison_retrieval_chain if is_sw else get_hw_comparison_retrieval_chain
+    )
+    comparison, comparison_refs, comparison_error = search_rag(
+        get_comparison, "핵심 아이디어와 구조적 접근 방식", label="대조 기술 RAG"
+    )
+    content = tech_research_chain.invoke(
         {
-            "tech_name": tech_sw,
-            "retrieved_chunks": sw_context,
-            "comparison_chunks": sw_comparison_context,
+            "tech_name": tech_name,
+            "retrieved_chunks": chunks,
+            "comparison_chunks": comparison,
+            "instruction": task["instruction"],
         }
     )
-    tech_research_hw = tech_research_chain.invoke(
-        {
-            "tech_name": tech_hw,
-            "retrieved_chunks": hw_context,
-            "comparison_chunks": hw_comparison_context,
-        }
-    )
+    return content, refs + comparison_refs, join_errors(error, comparison_error)
 
-    return {
-        "tech_research_sw": tech_research_sw,
-        "tech_research_hw": tech_research_hw,
-        "data_limited": data_limited,
-        "references": list(dict.fromkeys(references)),  # 순서 유지 + 중복 제거
-        "messages": [("system", "[기술 조사 RAG] 완료")],
-    }
+
+def tech_research(state: WorkerInput) -> dict:
+    """그래프에 등록할 노드 함수 (Task.worker == 'tech_research')"""
+    return run_with_retry(state, _tech_research_once, "tech_research")

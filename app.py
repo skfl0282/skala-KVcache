@@ -1,22 +1,22 @@
 """
-실행 스크립트
-담당: __________ (TODO: 담당자 배정 - 통합/실행 담당)
+실행 스크립트: Orchestrator-Workers 전문 워커 기반 KV Cache 기술 평가 시스템
 
 사용법:
     python app.py
-    python app.py --tech-sw "DeepSeek-V2 (MLA)" --tech-hw "ITME" --domain "데이터센터/클라우드"
+    python app.py --tech-sw "DeepSeek-V2 (MLA)" --tech-hw "ITME" --domain "데이터센터/클라우드 서빙"
     python app.py --graph               # 그래프 실행 없이 outputs/graph.png만 생성
 """
 
 import argparse
 import os
+import uuid
+from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-# LangSmith 추적: API 키와 추적 on/off는 .env에서 읽고, 프로젝트 이름만 여기서 정한다
-# (.env에 LANGSMITH_PROJECT가 있으면 그 값을 쓴다)
+# LangSmith 추적 환경변수 기본값 설정
 os.environ.setdefault("LANGSMITH_PROJECT", "SKALA-KVCACHE")
 
 from agents.tech_selector import DEFAULT_DOMAIN, DEFAULT_TECH_HW, DEFAULT_TECH_SW
@@ -24,10 +24,12 @@ from graph.build_graph import build_graph
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="KV Cache 최적화 기술 다관점 평가 Agentic RAG")
+    parser = argparse.ArgumentParser(
+        description="KV Cache 최적화 기술 다관점 평가 Orchestrator-Workers 시스템"
+    )
     parser.add_argument("--tech-sw", default=DEFAULT_TECH_SW, help="SW 진영 선정 기술명")
     parser.add_argument("--tech-hw", default=DEFAULT_TECH_HW, help="HW 진영 선정 기술명")
-    parser.add_argument("--domain", default=DEFAULT_DOMAIN, help="평가 도메인")
+    parser.add_argument("--domain", default=DEFAULT_DOMAIN, help="평가 대상 도메인")
     parser.add_argument(
         "--graph",
         action="store_true",
@@ -54,21 +56,56 @@ def main() -> None:
         render_graph(app)
         return
 
+    run_id = uuid.uuid4().hex[:8]
+    print("=" * 70)
+    print(" [KV Cache Optimization Evaluation] Orchestrator-Workers Pipeline")
+    print(f" - Run ID         : {run_id}")
+    print(f" - SW Technology  : {args.tech_sw}")
+    print(f" - HW Technology  : {args.tech_hw}")
+    print(f" - Target Domain  : {args.domain}")
+    print("=" * 70)
+
     initial_state = {
         "tech_sw": args.tech_sw,
         "tech_hw": args.tech_hw,
         "domain": args.domain,
-        "data_limited": [],
+        "run_id": run_id,
+        "tasks": {},
+        "results": {},
+        "decisions": [],
     }
 
-    final_state = app.invoke(
-        initial_state, config={"run_name": "kv-cache-eval", "tags": ["app"]}
-    )
+    config = {
+        "configurable": {"thread_id": f"thread-{run_id}"},
+        "run_name": f"kv-cache-eval-report-{run_id}",
+        "tags": ["app", "quality-loop", "specialized-workers"],
+    }
 
-    print("=" * 60)
-    print("실행 완료. 최종 보고서는 outputs/report.md 에 저장되었습니다.")
-    print("=" * 60)
-    print(final_state.get("report", "(report가 비어 있습니다)"))
+    final_state = app.invoke(initial_state, config=config)
+
+    review = final_state.get("review") or {}
+    tasks = final_state.get("tasks", {})
+    done_count = sum(1 for t in tasks.values() if t.get("status") == "done")
+    failed_count = sum(1 for t in tasks.values() if t.get("status") in ("failed", "excluded"))
+
+    print("\n" + "=" * 70)
+    print(" 파이프라인 실행 완료 요약")
+    print("=" * 70)
+    print(f" - Run ID                : {run_id}")
+    print(f" - 완료된 태스크 수      : {done_count}개 (제외/실패: {failed_count}개)")
+    print(f" - 보고서 작성 횟수(회)  : {final_state.get('revision', 1)}회")
+    if review:
+        print(f" - 최종 품질 평가 판정   : {'통과 (PASSED)' if review.get('passed') else '미달 (FAILED)'}")
+        if review.get("error"):
+            print(f"   (오류: {review['error']})")
+        for c in review.get("criteria", []):
+            print(f"   {'[통과]' if c['passed'] else '[미달]'} {c['name']}: {c['comment']}")
+    print(" - 저장된 최종 보고서    : outputs/report_orchestrator_workers.md")
+    print("=" * 70 + "\n")
+
+    report_content = final_state.get("report", "(보고서가 비어 있습니다)")
+    print("=== [최종 보고서 미리보기 (상위 500자)] ===")
+    print(report_content[:500] + ("..." if len(report_content) > 500 else ""))
 
 
 if __name__ == "__main__":
