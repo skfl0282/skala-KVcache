@@ -1,9 +1,12 @@
 """
 보고서 품질 평가 에이전트 (Quality Evaluator / LLM Judge)
 코드 기반 규칙 검사와 LLM Judge를 결합하여 4대 평가 기준(Groundedness, 중립성, 편향 통제, 관점 커버리지)을 심사한다.
+여기에 PDF 분량(MAX_PAGES쪽 이내)을 코드로 검사하는 항목을 더해, 하나라도 미달이면 재작성시킨다.
 """
 
+import os
 import re
+import tempfile
 from typing import List, Literal, Optional
 from urllib.parse import urlparse
 
@@ -12,12 +15,15 @@ from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END
 from pydantic import BaseModel, Field
 
-from agents.report_gen import report_inputs
-from agents.synthesis import collect_references
+from agents.report_gen import results_of
+from agents.report_pdf import MAX_PAGES, save_report_pdf
+from agents.synthesis import collect_limitations, collect_references
 from agents.worker_utils import PLANNER_MODEL
 from graph.state import CriterionResult, MAX_REVISIONS, ReportReview, ReportState
 
-URL_PATTERN = re.compile(r"https?://[^\s)>\]]+")
+# URL에 쓸 수 있는 ASCII 문자만 잡는다. 한국어 보고서는 URL 바로 뒤에 조사가 붙는 경우가 많아서
+# ("https://...04434에 따르면") 공백 전까지를 모두 잡으면 실제 출처도 '목록에 없는 URL'로 오판정된다.
+URL_PATTERN = re.compile(r"https?://[A-Za-z0-9\-._~:/?#@!$&'*+,;=%]+")
 
 
 def _urls(text: str) -> set:
@@ -96,6 +102,42 @@ def check_source_diversity(references: list[str]) -> tuple[bool, str]:
     if total == 1:
         return False, f"{summary} - 단일 출처에 의존"
     return True, summary
+
+
+def check_page_limit(report: str) -> tuple[bool, str]:
+    """분량(코드): PDF로 저장했을 때 MAX_PAGES쪽 이내인가.
+    report_gen과 같은 save_report_pdf로 임시 파일에 렌더링해서 센다 (글자 크기 자동 축소까지 동일하게 적용).
+    outputs/report.pdf는 건드리지 않는다."""
+    fd, path = tempfile.mkstemp(suffix=".pdf")
+    os.close(fd)
+    try:
+        pages = save_report_pdf(report, path)
+    except Exception as e:
+        return False, f"PDF 렌더링 실패로 분량을 확인할 수 없음: {e}"
+    finally:
+        os.remove(path)
+    if pages > MAX_PAGES:
+        return False, (
+            f"PDF {pages}쪽으로 분량 제한({MAX_PAGES}쪽)을 넘음. 근거·출처와 필수 소제목은 유지하되, "
+            f"중복 서술과 긴 표를 줄여 {MAX_PAGES}쪽 이내로 압축할 것"
+        )
+    return True, f"PDF {pages}쪽 (제한 {MAX_PAGES}쪽 이내)"
+
+
+def review_inputs(state: ReportState) -> dict:
+    """평가 프롬프트(review_prompt)의 채움 자리를 State에서 읽어 만든다."""
+    limitations = collect_limitations(state.get("tasks", {}))
+    references = collect_references(state)
+    return {
+        "tech_research_sw": results_of(state, "tech_research", "sw"),
+        "tech_research_hw": results_of(state, "tech_research", "hw"),
+        "market_eval": results_of(state, "market_eval"),
+        "stakeholder_eval": results_of(state, "stakeholder_eval"),
+        "domain_eval": results_of(state, "domain_eval"),
+        "synthesis": state.get("synthesis") or "종합 결과 없음",
+        "data_limited": "\n".join(f"- {item}" for item in limitations) or "없음",
+        "references": "\n".join(f"- {ref}" for ref in references) or "없음",
+    }
 
 
 CRITERIA = {
@@ -188,7 +230,7 @@ def quality_eval(state: ReportState) -> dict:
         reviewer = review_prompt | review_llm.with_structured_output(ReviewOutput)
         output = reviewer.invoke(
             {
-                **report_inputs(state),
+                **review_inputs(state),
                 "report": report,
                 "criteria": "\n".join(f"- {name}: {rule}" for name, rule in CRITERIA.items()),
             }
@@ -212,6 +254,10 @@ def quality_eval(state: ReportState) -> dict:
             passed = False
             comments.append("[LLM] 평가 결과 없음")
         criteria.append({"name": name, "passed": passed, "comment": " / ".join(comments)})
+
+    # 분량은 LLM 판정 없이 코드 검사만으로 판정한다
+    page_ok, page_comment = check_page_limit(report)
+    criteria.append({"name": "분량", "passed": page_ok, "comment": f"[코드] {page_comment}"})
 
     failed = [c for c in criteria if not c["passed"]]
     passed = not failed and error is None

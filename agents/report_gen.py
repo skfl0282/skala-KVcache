@@ -12,7 +12,7 @@ from langchain.chat_models import init_chat_model
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 
-from agents.report_pdf import save_report_pdf
+from agents.report_fit import fit_report_to_pages
 from agents.synthesis import collect_limitations, collect_references
 from agents.worker_utils import PLANNER_MODEL
 from graph.state import GraphState, ReportState
@@ -90,13 +90,14 @@ def report_gen(state: ReportState) -> dict:
     )
 
     os.makedirs("outputs", exist_ok=True)
+    # PDF가 10쪽을 넘으면 압축한 최종본으로 바꾼다 (md / PDF / State가 같은 내용이 되도록 PDF를 먼저 맞춤)
+    report, pages = fit_report_to_pages(report, "outputs/report.pdf")
+    print(f"outputs/report.pdf 저장 완료 ({pages}쪽)")
+
     # 기존 report.md와 오케스트레이터 전용 경로 둘 다 기록
     Path("outputs/report.md").write_text(report, encoding="utf-8")
     Path(REPORT_PATH).write_text(report, encoding="utf-8")
     print(f"{REPORT_PATH} 및 outputs/report.md 저장 완료")
-
-    pages = save_report_pdf(report, "outputs/report.pdf")
-    print(f"outputs/report.pdf 저장 완료 ({pages}쪽)")
 
     return {
         "report": report,
