@@ -1,7 +1,15 @@
 """prompts/*.txt 템플릿을 PromptTemplate으로 불러오는 공용 유틸리티.
 """
 
+import threading
+import time
+
 from langchain_core.prompts import PromptTemplate
+
+# Tavily는 요청이 한꺼번에 몰리면 429(요청 과다)로 막는다. 병렬 워커들의 웹검색을
+# 한 번에 하나씩만 보내고, 그래도 429가 나오면 아래 간격(초)으로 기다렸다 다시 보낸다.
+_search_lock = threading.Lock()
+RATE_LIMIT_WAITS = (2, 5, 10)
 
 
 def load_prompt(path: str) -> PromptTemplate:
@@ -44,11 +52,18 @@ def web_search(tool, query: str) -> dict:
     오류 메시지가 프롬프트에 그대로 들어가지 않게 한다. 자료 부족 여부는
     이후 충분성 판정이 data_limited로 기록한다.
     """
-    try:
-        results = tool.invoke({"query": query})
-    except Exception as e:
-        print(f"[WARN] 웹검색 실패 ({query}): {e}")
-        return {"results": []}
+    for wait in (*RATE_LIMIT_WAITS, None):
+        with _search_lock:
+            try:
+                results = tool.invoke({"query": query})
+            except Exception as e:
+                print(f"[WARN] 웹검색 실패 ({query}): {e}")
+                return {"results": []}
+            rate_limited = isinstance(results, dict) and "429" in str(results.get("error", ""))
+            if not rate_limited or wait is None:
+                break
+            print(f"[WARN] 웹검색 요청 과다(429), {wait}초 후 재시도 ({query})")
+            time.sleep(wait)
     if not isinstance(results, dict) or "error" in results:
         print(f"[WARN] 웹검색 실패 ({query}): {results}")
         return {"results": []}

@@ -1,220 +1,203 @@
-# KV Cache 최적화 기술 다관점 평가 Agentic RAG
+# KV Cache 최적화 기술 다관점 평가
 
 판교 9반 5조 · SKALA
 
 # Subject
 본 프로젝트는 KV cache 최적화 기술을 소프트웨어, 하드웨어 두 진영에서 선정하여,
-시장·이해관계자·도메인 관점에서 평가하는 Agentic RAG를 개발하는 프로젝트임.
+시장·이해관계자·도메인 관점에서 평가하는 Orchestrator-Workers 기반으로 설계/개발 하는
+프로젝트 임.
+
 
 ## Overview
 - Objective : 하나의 기술을 복수 관점에서 비교 평가
-- Method : Multi-Agent(Distributed) + Agentic RAG
-- Tools : LangGraph, LangChain(`init_chat_model`), Chroma, TavilySearch
+- Pattern : Orchestrator-Workers - 기술 성격에 따라 관점별로 필요한 조사 범위와
+  깊이가 달라, 어떤 워커를 몇 번 어떻게 나눠 부를지를 계획 단계에서 정하는 방식이
+  적합하다고 판단
+- 동적 처리 : 워커로 가는 고정 엣지 없이 Orchestrator가 세운 계획에 따라 `Send`로
+  task를 분배하므로, 실행마다 호출되는 워커의 종류·개수·지시가 달라짐. 실패한
+  task는 재시도 후 제외하고, 보고서는 품질 평가에 미달하면 피드백과 함께 재작성
+
 
 ## Selected Technologies
+- SW : **DeepSeek-V2 (Multi-head Latent Attention, MLA)** — Key-Value를 저랭크
+  latent 벡터로 공동 압축해 KV 캐시를 93.3% 줄이는 어텐션 구조. 양자화 계열
+  (TurboQuant, KIVI)이 매 스텝 양자화·역양자화 연산을 추가하는 것과 달리 압축을
+  아키텍처에 내재화했고, 실제 서비스 환경의 실측 처리량 근거가 있어 선정
+  (추정 TRL 8)
+- HW : **ITME (Inference Tiered Memory Expansion)** — CXL 하이브리드 메모리와
+  SSD-backed 원격 메모리를 GPU 서버가 RDMA로 접근하는 계층형 메모리 확장 구조.
+  KV 캐시를 줄이는 SW 접근과 달리 GPU 외부 메모리 용량 자체를 늘리는 방향이라
+  DeepSeek-V2와 상호 보완적이고, 특수 하드웨어를 전제로 하는 PIM/CXL보다 표준에
+  가까운 구성이라 재현성·상용화 경로가 명확해 선정 (추정 TRL 5)
 
-- SW : **DeepSeek-V2 (Multi-head Latent Attention, MLA)** — Key-Value를
-  저랭크 latent 벡터로 공동 압축하는 어텐션 구조로, KV 캐시를 93.3%
-  절감하고 8×H800 GPU 환경에서 생성 처리량 50K tokens/s 이상을 달성.
-  실제 서비스 배포 및 실측 처리량 근거는 있으나 장기 상용 운영·SLA 근거는
-  부족해 **추정 TRL 8**로 평가됨. 사후 압축 방식인 양자화 계열
-  (**TurboQuant**: 채널당 2.5~3.5비트로 압축하지만 매 스텝 양자화·역양자화
-  연산이 추가되는 한계, **KIVI**: 채널/토큰별 비대칭 2비트 양자화로 유사한
-  한계 공유) 대비, MLA는 런타임 보정 없이 아키텍처 자체에 압축을 내재화
-  했다는 점에서 비교 평가 대상으로서 타당성이 높다고 판단해 선정. KIVI는
-  이 한계가 TurboQuant만의 문제가 아님을 보여주는 보조 근거로
-  `TECH_PAPER_PATHS`에 포함.
-
-- HW : **ITME (Inference Tiered Memory Expansion with Disaggregated
-  CXL-Hybrid Memories)** — CXL 하이브리드 메모리와 SSD-backed 원격 메모리를
-  GPU 서버가 RDMA로 접근하게 하는 계층형 메모리 확장 아키텍처. FPGA
-  프로토타입 기준 약 18GB/s 프리페칭 처리량, CPU 오프로딩 대비 최대 35.7%
-  처리량 향상을 실측했으나 상용 배포 사례는 없어 **추정 TRL 5**로 평가됨.
-  GPU 내부에서 KV 캐시 자체를 줄이는 SW 접근(**InfiniGen**: 중요 토큰만
-  예측해 선택적 prefetch, 기존 대비 최대 3배 개선이나 매 레이어 speculation
-  비용이 들고 근본적인 메모리 용량 부족은 우회할 뿐 해결하진 못함)과 달리
-  GPU 외부 메모리 용량 자체를 확장하는 방향이라 SW(DeepSeek-V2)와 상호
-  보완적 비교 대상으로 선정. 가장 근접한 HW 경쟁 후보였던 **PIM/CXL**
-  (CXL 메모리 내 PNM 가속기로 최대 21.9배 처리량 보고)은 성능은 더
-  화려하지만 특수 목적 CXL-PNM 하드웨어를 전제로 해 상용화 경로가 불분명,
-  ITME는 비교적 표준에 가까운 조합만으로 구현돼 재현성·상용화 경로가 더
-  명확하다고 판단해 최종 선정.
-
-- 각 기술의 대조군(SW: TurboQuant, HW: InfiniGen) 원문도 RAG 인덱스에
-  포함해, `tech_research`가 "왜 이 대안을 선택하지 않았는지"를 근거 기반
-  으로 한 줄 비교하도록 함 (`rag/pdf.py`의 `SW_COMPARISON_PAPER_PATHS` /
-  `HW_COMPARISON_PAPER_PATHS`).
-- `TECH_PAPER_PATHS`에는 선정 기술 원문 2건 외에도 CXL 메모리 풀링/특성화,
-  GQA, KIVI, LIMINAL, PIMCXL, 데이터센터 인프라, SGLang, TransMLA,
-  vLLM 롱컨텍스트 등 관련 논문 총 15건을 함께 인덱싱해, `domain_eval`/
-  `stakeholder_eval`이 더 넓은 근거로 평가할 수 있도록 함.
-  
 
 ## Features
-- PDF 원문(선정 기술 DeepSeek-V2·ITME, 대조 기술 TurboQuant·InfiniGen,
-  관련 논문 11건 = 총 15건) 기반 RAG 정보 추출 (기술 조사, 도메인 평가,
-  이해관계자 평가)
-- Vision 딥러닝 모델 없이 PyMuPDF/pdfplumber 기하 분석만으로 Figure/Table
-  캡션 추출, 2단 컬럼 논문의 읽기 순서 재정렬, 수식·헤딩 정규화, 하이픈
-  결합을 수행하는 알고리즘 기반 PDF 파서 사용 (`rag/pdf_parser.py`,
-  실패 시 `PDFPlumberLoader`로 폴백)
-- 웹검색 기반 시장성 · 이해관계자 반응 조사
-- 기술 조사 결과에 NASA TRL 9단계 척도 기준 **기술성숙도(TRL) 평가**를
-  포함 (논문 게재/동료심사 여부, 실측 vs 시뮬레이션 검증 방식, 실제
-  서비스·제품 적용 여부를 근거로 판단)
-- 시장 / 이해관계자 / 도메인 평가 단계 모두 자료가 부족하면 `CorrectiveRAG`의
-  `GradeDocuments` 그레이더 패턴으로 충분성을 판정하고, 부족하면 웹검색
-  1회 보완 후 재생성·재판정 → 그래도 부족하면 재시도 없이 `data_limited`에
-  기록 → 최종 보고서 "한계점"에 반영
-- 관점별(시장성 / 이해관계자 / 도메인) Fan-out 병렬 평가 → 평가 종합 Fan-in
-  (`data_limited`, `references`는 `operator.add`로 누적되는 채널이라 각
-  노드가 자신의 항목만 반환)
-- 확증 편향 방지 전략 : 종합 단계에서 우열 판정 없이 관점 간 일치/상충
-  지점을 병렬 서술하도록 프롬프트 설계, 각 RAG/웹검색 노드가 실제로 인용한
-  출처만 `references`에 담아 보고서 REFERENCE 절에 그대로 반영(LLM이 자료를
-  지어내지 않도록 실제 출처 목록만 프롬프트에 전달)
+- PDF 자료 기반 정보 추출 : 선정 기술 원문 2건, 대조 기술(TurboQuant, InfiniGen)
+  2건, 관련 논문 11건 등 총 15건을 인덱싱. 대조 기술은 별도 컬렉션으로 분리해
+  "왜 이 대안을 선택하지 않았는지"를 근거 기반으로 비교
+- 알고리즘 기반 PDF 파서 : Vision 모델 없이 PyMuPDF/pdfplumber 기하 분석으로
+  Figure/Table 분리, 2단 컬럼 읽기 순서 재정렬, 수식·하이픈 정규화
+  (실패 시 `PDFPlumberLoader`로 폴백). 1200자 단위, 200자 겹침으로 청킹
+- 웹검색 기반 시장성·이해관계자 반응 조사 (TavilySearch)
+- 기술성숙도 평가 : NASA TRL 9단계 척도로 추정하고, 공개 정보 기반 추정임을 명시
+- 동적 계획과 커버리지 보장 : Orchestrator가 task를 계획하면, 네 관점 각각에서
+  SW와 HW가 모두 조사되는지 코드로 확인하고 빠진 부분은 기본 task로 보완.
+  계획 생성이 실패하면 기본 계획으로 대체
+- 실패 대응 : 워커는 task별로 최대 2회 시도하고, 끝까지 실패한 task는 종합에서
+  제외한 뒤 그 사실을 자료 한계로 보고서에 전달. 병렬 워커의 웹검색은 한 번에
+  하나씩 보내고, 요청 과다(429) 응답이 오면 간격을 두고 다시 시도
+- 확증 편향 방지 전략 : 워커와 종합 단계 모두 우열 판정 없이 한계와 반대 근거를
+  함께 쓰도록 프롬프트를 설계하고, 종합에서는 관점 간 일치·상충 지점을 병렬 서술.
+  각 워커가 실제로 검색한 출처만 `references`로 넘겨 LLM이 자료를 지어내지 않게 함
+- 보고서 품질 평가 : Groundedness, 중립성, 편향 통제, 관점 커버리지 4개 항목을
+  코드 검사(지어낸 URL, 출처 다양성, 필수 소제목)와 LLM 판정으로 평가하고, 분량
+  (PDF 10쪽 이내)을 코드로 검사. 모두 통과해야 통과이며, 미달이면 사유를 피드백으로
+  넘겨 최대 2회 재작성
+- 보고서 분량 맞춤 : 보고서를 PDF로 저장할 때 글자 크기를 10.5pt에서 9pt까지 줄여
+  보고, 그래도 10쪽을 넘으면 제목 구조·수치·출처를 유지한 채 LLM으로 최대 3회 압축
+
 
 ## Tech Stack
-- Framework : LangGraph (`init_chat_model` 기반 LangChain 체인)
-- LLM/Generator : `market_eval`/`domain_eval`/`stakeholder_eval`/`tech_research`는
-  `gpt-5.6-luna`, `synthesis`/`report_gen`은 `gpt-5.6-terra` (각 `agents/*.py`의
-  `MODEL_NAME` 참고)
-- LLM/Judge : `gpt-5.6-luna` (충분성 그레이더용, `market_eval`/`domain_eval`/
-  `stakeholder_eval` 공통)
-- Retrieval : Chroma — `{Hit Rate@K}`, `{MRR}` (TODO: 측정 후 기재)
-- Embedding : BGE-M3 (`rag/embeddings.py`) — 긴 문맥·다국어 지원, Dense/Sparse/
-  Multi-vector Retrieval, MIT License 오픈소스 — 논문 중심 텍스트 검색
-  적합성/구현 난이도/연산 자원/라이선스를 종합 고려해 선정
+- Framework : LangGraph (LangChain `init_chat_model`)
+- LLM/Generator : `gpt-5.6-terra` (Orchestrator, Synthesizer, 보고서 생성·압축),
+  `gpt-5.6-luna` (워커 4종)
+- LLM/Judge : `gpt-5.6-terra` (보고서 품질 평가)
+- Retrieval : Chroma - Hit Rate@K, MRR 미측정 (코사인 유사도, 메인 풀 상위 8개 /
+  대조 기술 풀 상위 4개)
+- Embedding : BGE-M3 - 긴 문맥·다국어 지원, MIT License
 
-## RAG 흐름
-1. **PDF → 텍스트 추출** (`rag/pdf_parser.py`, 실패 시 `PDFPlumberLoader` 폴백)
-   - 자체 파서를 1차로 쓰고, 실패하면 기본 PDF 로더로 폴백
-   - Figure/Table 영역은 캡션과 함께 고해상도 이미지로 따로 저장하고, 본문에서는 그 영역을 마스킹해서 제외
-   - 표는 셀 단위로 추출해 마크다운 표로 변환, 본문 하단에 첨부
-   - 2단 컬럼 논문의 읽기 순서를 자동 판별해서 올바르게 재정렬
-   - 수식은 KaTeX 형식으로 정규화, 줄바꿈에 끊긴 하이픈 단어도 복원
-   - 결과: PDF 한 페이지가 문서 하나로 변환되고, 출처(파일명)·페이지 번호·표/그림 목록이 메타데이터로 붙음
-2. **청킹** — 1200자 단위, 200자씩 겹치게 분할
-3. **임베딩** — BGE-M3 모델 사용, 정규화된 벡터로 변환 (코사인 유사도 계산 전제)
-4. **벡터 저장** (`rag/base.py`)
-   - 로컬 Chroma에 영구 저장
-   - 용도별로 컬렉션을 분리: 메인 원문(DeepSeek-V2, ITME + 관련 논문) / SW 대조 기술(TurboQuant) / HW 대조 기술(InfiniGen)
-   - 같은 컬렉션에 이미 데이터가 있으면 재삽입하지 않고 기존 인덱스를 재사용 → 여러 에이전트가 같은 풀을 반복 호출해도 중복 임베딩 안 됨
-5. **검색** — 코사인 유사도 기반, 메인 풀은 상위 8개, 대조 기술 풀은 상위 4개 청크를 가져옴. 각 에이전트가 자기 목적에 맞는 쿼리로 검색
-6. **프롬프트 주입** — 검색된 청크를 출처/페이지 정보가 보존된 형태로 묶어서 각 에이전트 프롬프트의 컨텍스트 자리에 넣고, 그 위에서 LLM이 최종 평가/조사 텍스트를 생성
 
 ## Agents
-설계서 A. Agent 정의 기준.
+- Orchestrator : 두 기술의 성격을 보고 어떤 워커를 몇 번, 무엇에 집중해서 부를지
+  계획하고 `Send`로 task를 분배
+- 기술 조사 워커 (`tech_research`) : 원문 RAG와 대조 기술 RAG로 기술 개요, 적용
+  범위, 한계, TRL 정리
+- 시장 평가 워커 (`market_eval`) : 웹검색으로 시장 규모·성장성, 상용화·채택 현황,
+  생태계 조사
+- 이해관계자 평가 워커 (`stakeholder_eval`) : RAG와 웹검색으로 경쟁사, 도입
+  기업·개발자, 투자 업계의 시각 정리
+- 도메인 평가 워커 (`domain_eval`) : RAG와 웹검색으로 데이터센터·클라우드에서의
+  처리 가능 규모, 비용 절감 효과, 제약 정리
+- Synthesizer : 실패한 task를 제외 판정하고, 관점별 결과를 일치·상충 지점이
+  드러나게 종합
+- 보고서 생성 (`report_gen`) : 관점별 결과와 종합 의견을 정해진 형식의 보고서로
+  작성하고 10쪽 이내로 맞춰 md와 PDF로 저장. 재작성 시 이전 보고서와 피드백을
+  함께 받음
+- 품질 평가 (`quality_eval`) : 4개 항목과 분량으로 보고서를 판정하고 통과, 재작성,
+  종료 중 하나를 결정
 
-| Agent | 노드 함수 | RAG 여부 | 역할 |
-|---|---|---|---|
-| 기술 조사 에이전트 | `tech_research` | O | 원문 15건 풀에서 기술 개요·범위·한계·TRL 추출, SW/HW 대조 기술과 비교 |
-| 시장 평가 에이전트 | `market_eval` | X | 시장 규모, 상용화/채택 현황, 성장 전망 검색 (충분성 판정 + 웹검색 1회 보완) |
-| 이해관계자 평가 에이전트 | `stakeholder_eval` | O | 경쟁사 반응, 개발자 평가, 투자/업계 시각 (RAG+웹검색, 충분성 판정 + 웹검색 1회 보완) |
-| 도메인 평가 에이전트 | `domain_eval` | O | 데이터센터·클라우드에서의 적용 적합성 평가 (충분성 판정 + 웹검색 1회 보완) |
-| 평가 종합 에이전트 | `synthesis` | X | 기술 조사 + 관점별 의견 종합 및 비교 (일치/상충 지점 서술) |
-| 보고서 생성 에이전트 | `report_gen` | X | 단계별 내용을 연결해 평가 보고서 생성 |
+
+## State Schema
+- 제어 vs 페이로드 분리 : 분배와 실패 대응에 쓰는 `tasks`(상태, 시도 횟수, 에러)와
+  워커 결과물인 `results`(본문, 출처)를 같은 `task_id`로 나눠 저장함. 덕분에
+  라우팅과 제외 판정은 본문을 읽지 않고 `tasks`만 보고 할 수 있음.
+- 관측성 위치 : 계획·재시도·제외·재작성 같은 결정과 그 사유는 `decisions`에 한
+  줄씩 남기고, 프롬프트나 검색 결과 같은 상세는 State가 아닌 LangSmith 트레이스에서
+  확인함.
+- 지속성 비용 : 검색 청크와 Tavily 원문은 워커의 지역 변수로만 쓰고 State에는 최종
+  본문과 출처만 넣음. `results`와 `review`는 덮어쓰는 방식이고 `decisions`는
+  재시도·재작성 상한만큼만 늘어나 체크포인트가 계속 커지지 않음. 대화 이력
+  (`messages`)은 두지 않음.
+- 상관 : 실행마다 만든 `run_id`를 State에 넣고, 체크포인트 `thread_id`와 LangSmith
+  실행 이름에도 같은 값을 넣어 한 번의 실행을 체크포인트와 트레이스 양쪽에서 같은
+  값으로 찾을 수 있음.
+- 재개/복구 : 체크포인터가 State를 저장하고, task별 `status`·`attempts`·`error`로
+  어디까지 끝났고 무엇이 실패했는지 판단함. 끝까지 실패한 task는 `excluded`로 바꿔
+  종합에서 빼고, 그 사실을 자료 한계로 보고서에 전달함.
+- 동시 처리 : 병렬 워커가 쓰는 `tasks`와 `results`는 키 단위 병합 리듀서를,
+  `decisions`는 이어 붙이는 리듀서를 가짐. 워커마다 `task_id`가 달라 같은 키를
+  동시에 쓰는 일이 없음.
+- 종료 보장 : 워커는 `MAX_ATTEMPTS`(2)까지만 시도하고 그 뒤에는 실패로 반환함.
+  되돌아가는 엣지는 `quality_eval → report_gen` 하나뿐이며, `MAX_REVISIONS`(2)를
+  넘으면 품질 기준에 미달이어도 종료함.
+
 
 ## Architecture
-<img width="286" height="692" alt="Technology Evaluation-2026-09-22-004218" src="https://github.com/user-attachments/assets/a33f6fc4-5a8d-4550-ac0b-40b7a9bab335" />
+```mermaid
+graph TD
+    START([START]) --> orchestrator
+    orchestrator -. Send .-> tech_research
+    orchestrator -. Send .-> market_eval
+    orchestrator -. Send .-> stakeholder_eval
+    orchestrator -. Send .-> domain_eval
+    tech_research --> synthesizer
+    market_eval --> synthesizer
+    stakeholder_eval --> synthesizer
+    domain_eval --> synthesizer
+    synthesizer --> report_gen
+    report_gen --> quality_eval
+    quality_eval -. 미달: 재작성 .-> report_gen
+    quality_eval -. 통과 또는 상한 도달 .-> END([END])
+```
+점선은 실행 시점에 결정되는 경로. 각 워커는 계획에 따라 0회 이상 호출됨.
 
-## Example Output (`python app.py` 실행 결과)
-아래는 `outputs/report.md`에 실제로 생성된 결과 발췌다 (기획 의도가 실제로
-구현·동작한다는 근거).
-
-- **TRL 평가 구현 → 실제 결과**: "4.1 기술 성숙도 관점"에 등급, 검증
-  근거, 미확인 사항까지 표로 정리되어 출력된다.
-  > | 구분 | DeepSeek-V2 MLA | ITME |
-  > |---|---|---|
-  > | 추정 TRL | TRL 8 | TRL 5 |
-  > | 검증 근거 | 실제 DeepSeek 서비스 환경에서 8개 H800 GPU 기준 처리량 측정 제시 | FPGA 프로토타입 및 LLM 추론 워크로드 기반 실험 |
-  > | 주요 미확인 사항 | 장기간 대규모 상용 운용, SLA, 멀티테넌트 지연시간 | 상용 서비스, 제품화, 대규모 운영, 표준화 및 장기 안정성 |
-
-- **SW/HW 결합 아키텍처 제안 → 실제 결과**: "4.4 도메인 적용 관점"에서
-  두 기술을 GPU HBM부터 원격 스토리지까지 계층별로 배치하는 구체적인
-  아키텍처까지 함께 제시된다.
-  > | 계층 | 권장 데이터 배치 |
-  > |---|---|
-  > | T1: GPU HBM | 현재 실행 레이어, 활성 expert, hot KV cache |
-  > | T3.5: ITME CXL 하이브리드 메모리 | 장기 KV/context, prefix cache, 저빈도 가중치 |
-  > | T4: 원격 공유 스토리지 | cold archive, 낮은 접근 빈도의 상태 |
-
-- **시장/이해관계자 평가에서 근거 없는 수치 추정 방지 → 실제 결과**:
-  확인되지 않은 항목은 임의로 채우지 않고 "근거 부족"/"추가 검증 필요"로
-  명시된다.
-  > 두 기술 모두 독립적인 시장 규모 및 CAGR 자료가 없어 정량적 시장성
-  > 판단에는 **근거 부족**이 있다.
-
-- **`references` 실제 출처 수집 구현 → 실제 결과**: REFERENCE 절에
-  생성형 LLM이 지어낸 설명이 아니라, RAG로 검색된 실제 원문 페이지와
-  실제 웹검색 URL이 그대로 출력된다.
-  ```
-  - data/raw/DeepSeek-V2.pdf (p.1)
-  - data/raw/ITME.pdf (p.2)
-  - data/raw/TurboQuant.pdf (p.1)
-  - data/raw/InfiniGen.pdf (p.9)
-  - ITME: Inference Tiered Memory Expansion ... - https://arxiv.org/html/2606.12556
-  - DeepSeek-V2: A Strong, Economical, and Efficient Mixture- ... - https://huggingface.co/papers/2405.04434
-  ```
-  (fan-out 노드들이 각자 검색한 출처를 병합만 하고 있어 위 목록에 중복이
-  남아있는 것은 알려진 한계 — `report_gen`에서 전역 dedupe 필요)
 
 ## Directory Structure
 ```
-├── data/
-│   └── raw/                # 원문 PDF 15건 (선정 기술 2 + 대조 기술 2 + 관련 논문 11)
-├── graph/
-│   ├── state.py             # GraphState(TypedDict + Annotated 설명)
-│   └── build_graph.py       # 노드/엣지 배선
-├── agents/                  # Agent별 노드 함수 (담당자별로 분담)
-│   ├── prompt_utils.py       # prompts/*.txt -> PromptTemplate 로더
-│   ├── tech_selector.py      # select_technology
-│   ├── tech_research.py      # tech_research (SW/HW 조사 + 대조 기술 비교 + TRL)
-│   ├── market_eval.py        # market_eval
-│   ├── stakeholder_eval.py   # stakeholder_eval
-│   ├── domain_eval.py        # domain_eval
-│   ├── synthesis.py          # synthesis
-│   └── report_gen.py         # report_gen
-├── rag/                     # RAG 공통 모듈
-│   ├── embeddings.py          # create_bge_m3_embeddings()
-│   ├── base.py                # RetrievalChain (ABC) - 원문 로딩~retriever 생성만 담당
-│   ├── pdf.py                 # PDFRetrievalChain, format_docs, build_tech_retrieval_chain
-│   └── pdf_parser.py          # 알고리즘 기반 학술 논문 PDF 파서 (DLA + 공간 마스킹 + 다단 정렬)
-├── prompts/                 # 에이전트별 프롬프트 템플릿 (PromptTemplate.from_template)
-├── outputs/                 # 평가 결과 저장 (report.md)
+├── data/                                    # 문서 풀
+│   ├── raw/                                 # 원문 PDF 15건 (선정 기술 2 + 대조 기술 2 + 관련 논문 11)
+│   ├── extracted/                           # PDF 파서 추출 결과 (논문별 폴더)
+│   └── processed/                           # 정제·조립된 논문 본문(md)과 이미지
+├── agents/                                  # Agent 모듈
+│   ├── orchestrator.py                      # 계획 수립, 커버리지 보완, 워커로 task 분배(Send)
+│   ├── tech_research.py                     # 기술 조사 워커 (RAG, 대조 기술 비교, TRL)
+│   ├── market_eval.py                       # 시장 평가 워커 (웹검색)
+│   ├── stakeholder_eval.py                  # 이해관계자 평가 워커 (RAG + 웹검색)
+│   ├── domain_eval.py                       # 도메인 평가 워커 (RAG + 웹검색)
+│   ├── synthesis.py                         # Synthesizer (실패 task 제외, 관점별 결과 종합)
+│   ├── report_gen.py                        # 보고서 생성 (md, pdf 저장)
+│   ├── report_fit.py                        # 보고서 분량 맞춤 (10쪽 초과 시 LLM 압축)
+│   ├── report_pdf.py                        # 마크다운 보고서 → PDF 변환 (글자 크기 자동 축소)
+│   ├── quality_eval.py                      # 보고서 품질 평가, 재작성 여부 결정
+│   ├── worker_utils.py                      # 워커 공통: 모델 설정, RAG/웹검색, 재시도
+│   ├── prompt_utils.py                      # 프롬프트 로더, 출처 추출, 웹검색 폴백·요청 과다 대응
+│   └── tech_selector.py                     # 기본 기술명·도메인 상수
+├── graph/                                   # 그래프
+│   ├── state.py                             # State 정의 (Task, TaskResult, Decision, GraphState, ReportState)
+│   └── build_graph.py                       # 노드 등록, 엣지 배선
+├── rag/                                     # RAG 공통 모듈
+│   ├── embeddings.py                        # BGE-M3 임베딩 생성
+│   ├── base.py                              # 로딩 → 청킹 → 임베딩 → Chroma 인덱싱 → retriever 생성
+│   ├── pdf.py                               # PDF 검색 체인, 원문·대조 기술 경로 목록
+│   └── pdf_parser.py                        # 알고리즘 기반 논문 PDF 파서
+├── prompts/                                 # 프롬프트 템플릿
+│   ├── tech_research.txt                    # 기술 조사
+│   ├── market_eval.txt                      # 시장 평가
+│   ├── stakeholder_eval.txt                 # 이해관계자 평가
+│   ├── domain_eval.txt                      # 도메인 평가
+│   ├── synthesis.txt                        # 평가 종합 (미사용, 프롬프트는 synthesis.py에 있음)
+│   └── report_gen.txt                       # 보고서 생성
+├── outputs/                                 # 실행 결과 저장
+│   ├── report.md                            # 평가 보고서 (마크다운)
+│   ├── report.pdf                           # 평가 보고서 (PDF, 10쪽 이내)
+│   ├── report_orchestrator_workers.md       # report.md와 같은 내용의 사본
+│   └── graph.png                            # 그래프 이미지
 ├── tests/
-│   └── test_graph_smoke.py  # 그래프 배선 스모크 테스트
-├── app.py                   # 실행 스크립트
-├── requirements.txt
-├── .env.example
+│   ├── test_graph_smoke.py                  # 그래프 배선 스모크 테스트
+│   └── test_rag_pdf.py                      # PDF 검색 체인·파서 단위 테스트
+├── orchestrator_workers_specialized.ipynb   # 설계 검증용 프로토타입 노트북
+├── app.py                                   # 실행 스크립트
+├── requirements.txt                         # 의존성 목록
+├── .env.example                             # API 키 템플릿
 └── README.md
 ```
+
 
 ## Usage
 ```bash
 pip install -r requirements.txt
-cp .env.example .env   # OPENAI_API_KEY, TAVILY_API_KEY 채우기
+cp .env.example .env   # OPENAI_API_KEY, TAVILY_API_KEY (선택: LANGSMITH_API_KEY)
 
-# data/raw/에 원문 PDF를 넣는다. 정확한 파일 목록/파일명은
-# rag/pdf.py의 TECH_PAPER_PATHS(선정 기술 + 관련 논문 전체) /
-# SW_COMPARISON_PAPER_PATHS / HW_COMPARISON_PAPER_PATHS 참고
-
-# 전체 그래프 실행
+# 전체 그래프 실행: 결과는 outputs/report.md, outputs/report.pdf
 python app.py
 
-# 그래프 배선 확인 (실제 LLM/웹검색 호출 발생 — API 키 필요)
-pytest tests/test_graph_smoke.py
+# 그래프를 실행하지 않고 outputs/graph.png만 생성
+python app.py --graph
 ```
 
-## 분담 가이드
-각 `agents/*.py`, `rag/*.py` 파일 상단에 `담당: __________` 와 함께 해당
-노드의 역할·입출력·TODO가 docstring으로 적혀 있습니다. `graph/build_graph.py`는
-전체 배선 담당(또는 팀 공통)이 관리하는 것을 권장합니다. 그래프 자체(노드
-등록/엣지 연결)는 `python3 -c "from graph.build_graph import build_graph; build_graph()"`
-로 API 키 없이도 구성 여부를 확인할 수 있습니다.
 
 ## Contributors
-- 박종문 — RAG수집, 정리, synthesis agent개발, 발표
-- 장나리 — 기술 조사 에이전트 및 시장 조사 에이전트 개발
-- 정서영 — 도메인 평가 에이전트, 이해관계자 평가 에이전트, 보고서 작성 에이전트 구현
-- 한상현 — PDF Parsing
+- 박종문 : 보고서 평가 노드 구현
+- 장나리 : Orchestrator-Workers 설계, Readme 작성
+- 정서영 : Orchestrator 구현
+- 한상현 : 기존 agent 워커로 변경
