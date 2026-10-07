@@ -59,18 +59,20 @@ def results_of(state: GraphState, worker: str, target: Optional[str] = None) -> 
 
 def report_inputs(state: GraphState) -> dict:
     """프롬프트의 모든 채움 자리를 State에서 읽어 사전으로 만든다."""
+    limitations = collect_limitations(state["tasks"])
+    references = collect_references(state)
     return {
         "tech_sw": state["tech_sw"],
         "tech_hw": state["tech_hw"],
         "domain": state["domain"],
-        "tech_sw_research": results_of(state, "tech_research", "sw"),
-        "tech_hw_research": results_of(state, "tech_research", "hw"),
+        "tech_research_sw": results_of(state, "tech_research", "sw"),
+        "tech_research_hw": results_of(state, "tech_research", "hw"),
         "market_eval": results_of(state, "market_eval"),
         "stakeholder_eval": results_of(state, "stakeholder_eval"),
         "domain_eval": results_of(state, "domain_eval"),
         "synthesis": state.get("synthesis") or "종합 결과 없음",
-        "limitations": collect_limitations(state),
-        "references": collect_references(state),
+        "data_limited": "\n".join(f"- {item}" for item in limitations) or "없음",
+        "references": "\n".join(f"- {ref}" for ref in references) or "없음",
     }
 
 
