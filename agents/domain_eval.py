@@ -10,27 +10,19 @@
 노드가 그려져 있다. 그 분기 + 웹검색 보완 루프를 이 노드 안에서 순차적으로 처리한다.
 """
 
+from typing import Literal
+
 from langchain.chat_models import init_chat_model
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_tavily import TavilySearch
 from pydantic import BaseModel, Field
 
-from agents.prompt_utils import load_prompt, rag_references, web_references
+from agents.prompt_utils import load_prompt, rag_references, web_references, web_search
 from graph.state import GraphState
-from rag.pdf import build_tech_retrieval_chain, format_docs
+from rag.pdf import format_docs, get_tech_retrieval_chain
 
 MODEL_NAME = "gpt-5.6-luna"
-
-_domain_chain = None
-
-
-def _get_domain_chain():
-    global _domain_chain
-    if _domain_chain is None:
-        _domain_chain = build_tech_retrieval_chain()  # 기술조사와 동일한 원문 풀 재사용
-    return _domain_chain
-
 
 domain_eval_prompt = load_prompt("prompts/domain_eval.txt")
 llm = init_chat_model(MODEL_NAME, model_provider="openai", temperature=0)
@@ -42,7 +34,7 @@ web_search_tool = TavilySearch(max_results=3)
 class GradeSufficiency(BaseModel):
     """도메인 평가 결과가 충분한지 평가하는 이진 점수"""
 
-    binary_score: str = Field(description="충분하면 'yes', 부족하면 'no'")
+    binary_score: Literal["yes", "no"] = Field(description="충분하면 'yes', 부족하면 'no'")
 
 
 _grader_llm = init_chat_model(MODEL_NAME, model_provider="openai", temperature=0)
@@ -69,25 +61,27 @@ def domain_eval(state: GraphState):
     tech_sw = state["tech_sw"]
     tech_hw = state["tech_hw"]
     domain = state["domain"]
+    # data_limited는 operator.add로 누적되는 채널이므로, 이 노드는 자신이
+    # 새로 추가하는 항목만 담은 리스트를 반환한다 (전체 리스트를 재구성해서
+    # 반환하면 병렬로 함께 쓰는 market_eval의 항목과 합쳐질 때 중복된다).
+    new_data_limited: list[str] = []
     # RAG 검색
     references: list[str] = []
     try:
-        retriever = _get_domain_chain().retriever
+        retriever = get_tech_retrieval_chain().retriever
         rag_docs = retriever.invoke(f"{tech_sw} {tech_hw} {domain}")
         context = format_docs(rag_docs)
         references.extend(rag_references(rag_docs))
     except Exception as e:
-        print(f"[WARN] RAG 체인이 아직 준비되지 않았습니다: {e}")
+        print(f"[WARN] RAG 체인 호출 실패: {e}")
         context = ""
+        new_data_limited.append("domain_eval (RAG 검색 실패)")
 
     # 웹검색은 항상 수행
-    search_results = web_search_tool.invoke(
-        {
-            "query": (
-                f"{tech_sw} {tech_hw} {domain} "
-                "scalability throughput memory cost saving TCO energy efficiency"
-            )
-        }
+    search_results = web_search(
+        web_search_tool,
+        f"{tech_sw} {tech_hw} {domain} "
+        "scalability throughput memory cost saving TCO energy efficiency",
     )
     references.extend(web_references(search_results))
 
@@ -104,14 +98,10 @@ def domain_eval(state: GraphState):
     )
     print("\n==== [CHECK DOMAIN EVAL SUFFICIENCY] ====\n")
     score = (_sufficiency_prompt | _sufficiency_grader).invoke({"eval_text": result})
-    # data_limited는 operator.add로 누적되는 채널이므로, 이 노드는 자신이
-    # 새로 추가하는 항목만 담은 리스트를 반환한다 (전체 리스트를 재구성해서
-    # 반환하면 병렬로 함께 쓰는 market_eval의 항목과 합쳐질 때 중복된다).
-    new_data_limited: list[str] = []
     if score.binary_score != "yes":
         print("==== [DECISION: INSUFFICIENT -> WEB SEARCH SUPPLEMENT] ====")
-        supplement_search_results = web_search_tool.invoke(
-            {"query": f"{tech_sw} {tech_hw} {domain} 비용 절감 처리 규모"}
+        supplement_search_results = web_search(
+            web_search_tool, f"{tech_sw} {tech_hw} {domain} 비용 절감 처리 규모"
         )
         references.extend(web_references(supplement_search_results))
         result = domain_eval_chain.invoke(
@@ -129,7 +119,7 @@ def domain_eval(state: GraphState):
         score = (_sufficiency_prompt | _sufficiency_grader).invoke({"eval_text": result})
         if score.binary_score != "yes":
             print("==== [DECISION: STILL INSUFFICIENT AFTER SUPPLEMENT] ====")
-            new_data_limited = ["domain_eval"]
+            new_data_limited.append("domain_eval")
         else:
             print("==== [DECISION: SUFFICIENT AFTER SUPPLEMENT] ====")
     else:

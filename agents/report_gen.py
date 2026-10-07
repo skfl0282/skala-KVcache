@@ -31,7 +31,9 @@ def report_gen(state: GraphState):
     print("\n==== [REPORT GEN] ====\n")
 
     data_limited = state.get("data_limited", [])
-    references = state.get("references", [])
+    # fan-out 노드들이 각자 dedupe한 목록이 operator.add로 합쳐지므로, 노드 간
+    # 중복은 여기서 한 번 더 제거한다 (순서 유지).
+    references = list(dict.fromkeys(state.get("references", [])))
 
     report = report_gen_chain.invoke(
         {

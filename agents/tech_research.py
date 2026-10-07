@@ -12,41 +12,13 @@ from langchain_core.output_parsers import StrOutputParser
 from agents.prompt_utils import load_prompt, rag_references
 from graph.state import GraphState
 from rag.pdf import (
-    build_hw_comparison_retrieval_chain,
-    build_sw_comparison_retrieval_chain,
-    build_tech_retrieval_chain,
     format_docs,
+    get_hw_comparison_retrieval_chain,
+    get_sw_comparison_retrieval_chain,
+    get_tech_retrieval_chain,
 )
 
 MODEL_NAME = "gpt-5.6-luna"
-
-_tech_chain = None
-_sw_comparison_chain = None
-_hw_comparison_chain = None
-
-
-def _get_tech_chain():
-    global _tech_chain
-    if _tech_chain is None:
-        _tech_chain = build_tech_retrieval_chain()
-    return _tech_chain
-
-
-def _get_sw_comparison_chain():
-    """SW(DeepSeek-V2) 쪽에서 제외된 대조 기술(TurboQuant) 전용 RAG 체인."""
-    global _sw_comparison_chain
-    if _sw_comparison_chain is None:
-        _sw_comparison_chain = build_sw_comparison_retrieval_chain()
-    return _sw_comparison_chain
-
-
-def _get_hw_comparison_chain():
-    """HW(ITME) 쪽에서 제외된 대조 기술(InfiniGen) 전용 RAG 체인."""
-    global _hw_comparison_chain
-    if _hw_comparison_chain is None:
-        _hw_comparison_chain = build_hw_comparison_retrieval_chain()
-    return _hw_comparison_chain
-
 
 tech_research_prompt = load_prompt("prompts/tech_research.txt")
 llm = init_chat_model(MODEL_NAME, model_provider="openai", temperature=0)
@@ -62,8 +34,9 @@ def tech_research(state: GraphState):
     tech_hw = state["tech_hw"]
 
     references: list[str] = []
+    data_limited: list[str] = []
     try:
-        retriever = _get_tech_chain().retriever
+        retriever = get_tech_retrieval_chain().retriever
         sw_docs = retriever.invoke(tech_sw)
         hw_docs = retriever.invoke(tech_hw)
         sw_context = format_docs(sw_docs)
@@ -73,11 +46,12 @@ def tech_research(state: GraphState):
     except Exception as e:  # RAG 체인 로딩 실패(PDF 누락, 인덱싱 오류 등) 시 빈 컨텍스트로 폴백
         print(f"[WARN] RAG 체인 호출 실패: {e}")
         sw_context = hw_context = ""
+        data_limited.append("tech_research (RAG 검색 실패)")
 
     # tech_sw/tech_hw 이름 자체는 대조 기술 원문에 등장하지 않으므로, 각 대조
     # 기술의 핵심 개념으로 직접 검색해야 논문 초록/핵심 아이디어 청크가 검색된다.
     try:
-        sw_comparison_docs = _get_sw_comparison_chain().retriever.invoke(
+        sw_comparison_docs = get_sw_comparison_retrieval_chain().retriever.invoke(
             "벡터 양자화 압축 기법의 핵심 아이디어"
         )
         sw_comparison_context = format_docs(sw_comparison_docs)
@@ -87,7 +61,7 @@ def tech_research(state: GraphState):
         sw_comparison_context = ""
 
     try:
-        hw_comparison_docs = _get_hw_comparison_chain().retriever.invoke(
+        hw_comparison_docs = get_hw_comparison_retrieval_chain().retriever.invoke(
             "GPU/CPU 메모리 계층 간 동적 KV 캐시 관리 기법의 핵심 아이디어"
         )
         hw_comparison_context = format_docs(hw_comparison_docs)
@@ -114,6 +88,7 @@ def tech_research(state: GraphState):
     return {
         "tech_research_sw": tech_research_sw,
         "tech_research_hw": tech_research_hw,
+        "data_limited": data_limited,
         "references": list(dict.fromkeys(references)),  # 순서 유지 + 중복 제거
         "messages": [("system", "[기술 조사 RAG] 완료")],
     }

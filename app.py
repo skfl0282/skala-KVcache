@@ -5,9 +5,11 @@
 사용법:
     python app.py
     python app.py --tech-sw "DeepSeek-V2 (MLA)" --tech-hw "ITME" --domain "데이터센터/클라우드"
+    python app.py --graph               # 그래프 실행 없이 outputs/graph.png만 생성
 """
 
 import argparse
+import os
 
 from dotenv import load_dotenv
 
@@ -22,13 +24,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tech-sw", default=DEFAULT_TECH_SW, help="SW 진영 선정 기술명")
     parser.add_argument("--tech-hw", default=DEFAULT_TECH_HW, help="HW 진영 선정 기술명")
     parser.add_argument("--domain", default=DEFAULT_DOMAIN, help="평가 도메인")
+    parser.add_argument(
+        "--graph",
+        action="store_true",
+        help="그래프를 실행하지 않고 build_graph() 결과를 outputs/graph.png로 렌더링만 하고 종료",
+    )
     return parser.parse_args()
+
+
+def render_graph(app) -> None:
+    """build_graph()로 컴파일된 그래프를 실제 노드/엣지 그대로 outputs/graph.png에 렌더링한다."""
+    os.makedirs("outputs", exist_ok=True)
+    png_bytes = app.get_graph().draw_mermaid_png()
+    with open("outputs/graph.png", "wb") as f:
+        f.write(png_bytes)
+    print("outputs/graph.png 저장 완료")
 
 
 def main() -> None:
     args = parse_args()
 
     app = build_graph()
+
+    if args.graph:
+        render_graph(app)
+        return
 
     initial_state = {
         "tech_sw": args.tech_sw,

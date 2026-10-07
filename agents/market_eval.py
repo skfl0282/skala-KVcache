@@ -10,13 +10,15 @@
 최종 보고서 "한계점"에 반영한다.
 """
 
+from typing import Literal
+
 from langchain.chat_models import init_chat_model
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_tavily import TavilySearch
 from pydantic import BaseModel, Field
 
-from agents.prompt_utils import load_prompt, web_references
+from agents.prompt_utils import load_prompt, web_references, web_search
 from graph.state import GraphState
 
 MODEL_NAME = "gpt-5.6-luna"
@@ -30,7 +32,7 @@ market_eval_chain = market_eval_prompt | llm | StrOutputParser()
 class GradeSufficiency(BaseModel):
     """시장 평가 결과가 충분한지 평가하는 이진 점수"""
 
-    binary_score: str = Field(description="충분하면 'yes', 부족하면 'no'")
+    binary_score: Literal["yes", "no"] = Field(description="충분하면 'yes', 부족하면 'no'")
 
 
 _grader_llm = init_chat_model(MODEL_NAME, model_provider="openai", temperature=0)
@@ -59,8 +61,8 @@ def market_eval(state: GraphState):
     tech_sw = state["tech_sw"]
     tech_hw = state["tech_hw"]
 
-    search_results = web_search_tool.invoke(
-        {"query": f"{tech_sw} vs {tech_hw} 시장 규모 CAGR 채택 사례"}
+    search_results = web_search(
+        web_search_tool, f"{tech_sw} vs {tech_hw} 시장 규모 CAGR 채택 사례"
     )
     references = web_references(search_results)
     result = market_eval_chain.invoke(
@@ -78,8 +80,8 @@ def market_eval(state: GraphState):
         }
 
     print("==== [DECISION: INSUFFICIENT -> WEB SEARCH 1회 보완] ====")
-    extra_results = web_search_tool.invoke(
-        {"query": f"{tech_sw} vs {tech_hw} 시장 점유율 생태계 표준화 컨소시엄 도입 사례"}
+    extra_results = web_search(
+        web_search_tool, f"{tech_sw} vs {tech_hw} 시장 점유율 생태계 표준화 컨소시엄 도입 사례"
     )
     references.extend(web_references(extra_results))
     result = market_eval_chain.invoke(

@@ -7,6 +7,7 @@
 담당: __________ (TODO: 담당자 배정)
 """
 
+from functools import lru_cache
 from typing import Annotated
 
 from langchain_community.document_loaders import PDFPlumberLoader
@@ -58,7 +59,6 @@ TECH_PAPER_PATHS = [
     "data/raw/Design_Tradeoffs_CXL_Memory_Pools_no-refs.pdf",
     "data/raw/GQA_Training_Generalized_Multi_Query_Transformer_Models_from_Multi_Head_Checkpoints.pdf",
     "data/raw/ITME.pdf",
-    "data/raw/InfiniGen.pdf",
     "data/raw/KIVI_no-refs.pdf",
     "data/raw/LIMINAL_Efficient_LLM_Inference_no-refs.pdf",
     "data/raw/PIMCXL_no-refs.pdf",
@@ -66,7 +66,6 @@ TECH_PAPER_PATHS = [
     "data/raw/SGLang_v0.3_Release_7x_ Faster_DeepSeek MLA, 1.5x Faster torch.compile, Multi-Image_Video LLaVA-OneVision - LMSYS Org.pdf",
     "data/raw/Systematic_CXL_Memory_Characterization_at_Scale_no-refs.pdf",
     "data/raw/TransMLA_MLA_Is_All_You_Need.pdf",
-    "data/raw/TurboQuant.pdf",
 ]
 
 
@@ -107,3 +106,21 @@ def build_hw_comparison_retrieval_chain(
     return PDFRetrievalChain(
         source_uri=source_uri, collection_name="kv_cache_comparison_hw", k=4
     ).create_chain()
+
+
+# --- 에이전트 공용 캐시. tech_research / domain_eval / stakeholder_eval이
+# 모듈마다 따로 체인을 만들면 같은 컬렉션을 3번 여는 셈이라, 프로세스당
+# 한 번만 만들어 공유한다. ---
+@lru_cache(maxsize=1)
+def get_tech_retrieval_chain() -> PDFRetrievalChain:
+    return build_tech_retrieval_chain()
+
+
+@lru_cache(maxsize=1)
+def get_sw_comparison_retrieval_chain() -> PDFRetrievalChain:
+    return build_sw_comparison_retrieval_chain()
+
+
+@lru_cache(maxsize=1)
+def get_hw_comparison_retrieval_chain() -> PDFRetrievalChain:
+    return build_hw_comparison_retrieval_chain()

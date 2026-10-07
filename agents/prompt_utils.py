@@ -34,3 +34,22 @@ def web_references(search_results) -> list[str]:
             title = item.get("title")
             refs.append(f"{title} - {url}" if title else url)
     return refs
+
+
+def web_search(tool, query: str) -> dict:
+    """TavilySearch를 호출하되, 실패해도 그래프가 죽지 않도록 빈 결과로 폴백한다.
+
+    TavilySearch는 결과가 0건이면 ToolException을 던지고, API/네트워크 오류는
+    예외 대신 {"error": ...} dict로 돌려준다. 두 경우 모두 빈 결과로 통일해서
+    오류 메시지가 프롬프트에 그대로 들어가지 않게 한다. 자료 부족 여부는
+    이후 충분성 판정이 data_limited로 기록한다.
+    """
+    try:
+        results = tool.invoke({"query": query})
+    except Exception as e:
+        print(f"[WARN] 웹검색 실패 ({query}): {e}")
+        return {"results": []}
+    if not isinstance(results, dict) or "error" in results:
+        print(f"[WARN] 웹검색 실패 ({query}): {results}")
+        return {"results": []}
+    return results

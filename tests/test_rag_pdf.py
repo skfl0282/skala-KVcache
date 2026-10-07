@@ -2,6 +2,9 @@
 """
 
 from pathlib import Path
+
+import pymupdf
+
 from rag.pdf import (
     PDFRetrievalChain,
     format_docs,
@@ -19,8 +22,12 @@ def test_pdf_load_documents_and_format():
     chain = PDFRetrievalChain(source_uri=[sample_pdf])
     docs = chain.load_documents([sample_pdf])
 
-    # 1. 문서 페이지 수 검증
-    assert len(docs) == 13, f"ITME.pdf 페이지 수가 일치하지 않습니다 (기대: 13, 실제: {len(docs)})"
+    # 1. 문서 페이지 수 검증 (PDF 판본이 바뀌어도 깨지지 않게 원본에서 직접 센다)
+    with pymupdf.open(sample_pdf) as pdf:
+        expected_pages = len(pdf)
+    assert len(docs) == expected_pages, (
+        f"ITME.pdf 페이지 수가 일치하지 않습니다 (기대: {expected_pages}, 실제: {len(docs)})"
+    )
 
     # 2. 필수 메타데이터 검증
     for idx, doc in enumerate(docs):
@@ -53,21 +60,18 @@ def test_deepseek_equations_extraction():
     docs = chain.load_documents([sample_pdf])
 
     # 1. 문서 페이지 수 검증
-    assert len(docs) == 52, f"DeepSeek-V2.pdf 페이지 수가 일치하지 않습니다: {len(docs)}"
+    with pymupdf.open(sample_pdf) as pdf:
+        expected_pages = len(pdf)
+    assert len(docs) == expected_pages, (
+        f"DeepSeek-V2.pdf 페이지 수가 일치하지 않습니다 (기대: {expected_pages}, 실제: {len(docs)})"
+    )
 
-    # 2. Page 7 (0-indexed 6) 수식 검증: Eq 4, 5, 6, 8, 9, 10, 11
-    p7_text = docs[6].page_content
-    assert "$$" in p7_text, "Page 7에 $$ 수식 블록이 누락되었습니다."
-    assert r"\tag{4}" in p7_text, "Eq (4) 태그가 누락되었습니다."
-    assert r"\tag{9}" in p7_text, "Eq (9) 태그가 누락되었습니다."
-    assert r"\tag{10}" in p7_text, "Eq (10) 태그가 누락되었습니다."
-    assert r"\tag{11}" in p7_text, "Eq (11) 태그가 누락되었습니다."
-
-    # 3. Page 8 (0-indexed 7) 수식 검증: Eq 12, 14, 15
-    p8_text = docs[7].page_content
-    assert r"\tag{12}" in p8_text, "Eq (12) 태그가 누락되었습니다."
-    assert r"\tag{14}" in p8_text, "Eq (14) 태그가 누락되었습니다."
-    assert r"\tag{15}" in p8_text, "Eq (15) 태그가 누락되었습니다."
+    # 2. 핵심 수식 검증 (판본마다 쪽 배치가 달라지므로 페이지를 고정하지 않고
+    #    문서 전체에서 찾는다): MLA 본문 수식 Eq 4, 9~12, 14, 15
+    full_text = "\n".join(doc.page_content for doc in docs)
+    assert "$$" in full_text, "$$ 수식 블록이 누락되었습니다."
+    for eq_num in (4, 9, 10, 11, 12, 14, 15):
+        assert rf"\tag{{{eq_num}}}" in full_text, f"Eq ({eq_num}) 태그가 누락되었습니다."
 
 
 if __name__ == "__main__":
