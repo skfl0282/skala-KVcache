@@ -15,6 +15,7 @@ from langchain.chat_models import init_chat_model
 from langchain_core.output_parsers import StrOutputParser
 
 from agents.prompt_utils import load_prompt
+from agents.report_pdf import save_report_pdf
 from graph.state import GraphState
 
 MODEL_NAME = "gpt-5.6-terra"
@@ -55,6 +56,8 @@ def report_gen(state: GraphState):
     with open("outputs/report.md", "w", encoding="utf-8") as f:
         f.write(report)
     print("outputs/report.md 저장 완료")
+    pages = save_report_pdf(report, "outputs/report.pdf")
+    print(f"outputs/report.pdf 저장 완료 ({pages}쪽)")
 
     return {
         "report": report,

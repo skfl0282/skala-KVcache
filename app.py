@@ -66,7 +66,7 @@ def main() -> None:
     )
 
     print("=" * 60)
-    print("실행 완료. 최종 보고서는 outputs/report.md 에 저장되었습니다.")
+    print("실행 완료. 최종 보고서는 outputs/report.md, outputs/report.pdf 에 저장되었습니다.")
     print("=" * 60)
     print(final_state.get("report", "(report가 비어 있습니다)"))
 
